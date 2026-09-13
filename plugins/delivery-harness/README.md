@@ -4,6 +4,12 @@ One self-contained plugin for product context, precise specifications, isolated
 implementation, independent verification and a fresh-main worktree-to-PR flow.
 It reconciles five workflows instead of invoking five competing coordinators.
 
+Version 1.1.0 is maintained in [the Delivery repository](https://github.com/aiatsuk/delivery)
+under `plugins/delivery-harness`. The repository pins public upstream tools as Git
+submodules and provides `tools/upstreams.py` for explicit, content-bound update
+review. Those development inputs/tools are intentionally not runtime dependencies.
+See its `docs/SYNCHRONIZATION.md`; updating a pin alone never updates this package.
+
 ## Use
 
 Invoke the `delivery` skill from this plugin, then describe the task normally:
