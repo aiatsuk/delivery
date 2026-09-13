@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "title": "<change title>",
+  "mode": "standard",
+  "sources": [
+    {
+      "kind": "pr",
+      "ref": "<PR or ticket reference>",
+      "location": "<url or path>",
+      "authority": "implementation"
+    }
+  ],
+  "references": [
+    {
+      "id": "REF-1",
+      "kind": "ticket",
+      "title": "<document title>",
+      "location": "<url, path, or key>",
+      "relevance": "<which expectation this document defines>"
+    }
+  ],
+  "intent": {
+    "stated": "<what the source says the change does>",
+    "reconstructed": "<what the diff actually does>",
+    "divergences": [
+      "<difference between stated intent and implementation>"
+    ]
+  },
+  "changed_surface": [
+    {
+      "path": "<file, contract, config, or migration>",
+      "status": "modified",
+      "summary": "<what changed there>"
+    }
+  ],
+  "affected_surface": [
+    {
+      "area": "<component, flow, consumer, or client version>",
+      "why": "<mechanism of the effect>",
+      "evidence": ["REF-1"]
+    }
+  ],
+  "no_material_risk_rationale": "",
+  "risks": [
+    {
+      "id": "RISK-001",
+      "title": "<one-line failure>",
+      "mechanism": "<how the failure happens step by step>",
+      "invariant": "<invariant it violates>",
+      "evidence": ["<path:line>", "REF-1"],
+      "reality": "possible",
+      "severity": "high",
+      "detectability": "<how it would be noticed in production>",
+      "blast_radius": "<who and how much is affected>",
+      "existing_protection": "<current guard, or none>",
+      "disposition": "verify",
+      "cases": ["CASE-001"],
+      "found_in_pass": 1
+    }
+  ],
+  "cases": [
+    {
+      "id": "CASE-001",
+      "title": "<what this case proves>",
+      "risks": ["RISK-001"],
+      "requirements": [],
+      "references": ["REF-1"],
+      "objective": "<the question this case answers>",
+      "why_it_catches_the_risk": "<causal link to the risk mechanism>",
+      "preconditions": ["<system, account, flag, and data state>"],
+      "environment": {
+        "build": "<revision or artifact>",
+        "services": "<versions and configuration>",
+        "data": "<seed or fixture set>",
+        "clock": "<fixed, real, or controlled>",
+        "network": "<direct or proxied>"
+      },
+      "fixtures": ["<exact record and identifier>"],
+      "fault_injection": ["<injected failure, timing, or restart, and the tool>"],
+      "steps": [
+        {
+          "n": 1,
+          "action": "<exact executable action with inputs>",
+          "expected": "<observable state after this action>",
+          "how_to_observe": "<exact query, log line, screen, metric, or file>"
+        }
+      ],
+      "intermediate_checks": ["<observation that localizes a failure>"],
+      "expected_final_state": ["<stable observable end state>"],
+      "forbidden_outcomes": ["<what must never happen>"],
+      "oracle": {
+        "kind": "database",
+        "source": "<authoritative store or system>",
+        "query": "<exact query or lookup>",
+        "expected": "<exact expected value>"
+      },
+      "side_effect_count": "<exact count or 'not applicable: reason'>",
+      "evidence": ["<artifact to capture and where it is stored>"],
+      "cleanup": ["<how the environment is restored>"],
+      "repeat": 1,
+      "timeout": "<limit>",
+      "flake_policy": "<what an inconsistent result means and what to do>",
+      "safety": "safe",
+      "review": {
+        "verdict": "accepted",
+        "findings": []
+      }
+    }
+  ],
+  "environment": {
+    "available": ["<capability the project already provides>"],
+    "required": ["<capability this plan needs>"],
+    "missing": [
+      {
+        "capability": "<missing capability>",
+        "needed_for": ["CASE-001"],
+        "request": "<concrete change that would unblock it>"
+      }
+    ],
+    "setup": [
+      {
+        "step": "<setup action>",
+        "command": "<exact command or 'manual'>"
+      }
+    ]
+  },
+  "execution_plan": [
+    {
+      "order": 1,
+      "case": "CASE-001",
+      "rationale": "<why this runs at this position>",
+      "stop_on_fail": true
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q-1",
+      "question": "<what only a human can decide>",
+      "why": "<what it changes>",
+      "blocking": true,
+      "owner": "human"
+    }
+  ],
+  "waivers": [
+    {
+      "risk": "RISK-002",
+      "reason": "<why it is accepted without a check>",
+      "owner": "<accepting owner>",
+      "revisit": "<trigger that reopens it>"
+    }
+  ]
+}

@@ -1,0 +1,652 @@
+{
+  "schema_version": 1,
+  "title": "PAY-142 payment retry",
+  "mode": "deep",
+  "mode_reason": "payments and persistence are critical areas and money is irreversible",
+  "no_material_risk_rationale": "",
+  "sources": [
+    {
+      "kind": "pr",
+      "ref": "#67",
+      "location": "pr-67.md",
+      "authority": "implementation"
+    },
+    {
+      "kind": "diff",
+      "ref": "before..repo",
+      "location": "actual-diff.json",
+      "authority": "implementation"
+    },
+    {
+      "kind": "ticket",
+      "ref": "PAY-142",
+      "location": "docs/PAY-142.md",
+      "authority": "intent"
+    }
+  ],
+  "references": [
+    {
+      "id": "REF-1",
+      "kind": "ticket",
+      "title": "PAY-142 Retry charges on provider timeout",
+      "location": "docs/PAY-142.md",
+      "relevance": "retry limit and the never-charge-twice rule"
+    },
+    {
+      "id": "REF-2",
+      "kind": "design",
+      "title": "Payment state machine",
+      "location": "docs/payments-design.md",
+      "relevance": "invariants I-1, I-2, I-3"
+    },
+    {
+      "id": "REF-3",
+      "kind": "code",
+      "title": "Retry implementation",
+      "location": "src/payments/retry.py:11",
+      "relevance": "per-attempt idempotency key"
+    },
+    {
+      "id": "REF-4",
+      "kind": "code",
+      "title": "Payment events consumer",
+      "location": "src/payments/events.py:3",
+      "relevance": "consumer applies every delivery"
+    }
+  ],
+  "intent": {
+    "stated": "Retry a timed-out charge up to three times; never charge a buyer twice; keep local status converging with the provider ledger.",
+    "reconstructed": "Bounded retry loop with a fresh idempotency key per attempt, an attempt row per try, and no applied-once guard in the events consumer.",
+    "divergences": [
+      "REF-1 forbids a second charge, but src/payments/retry.py:11 generates a new idempotency key per attempt so the provider cannot deduplicate (REF-3).",
+      "The PR calls the consumer change a simplification; REF-2 invariant I-3 requires idempotent consumers under at-least-once delivery (REF-4).",
+      "Neither source describes reconciliation for attempts that time out after the provider already charged."
+    ]
+  },
+  "changed_surface": [
+    {
+      "path": "src/payments/retry.py",
+      "status": "modified",
+      "summary": "retry loop, per-attempt idempotency key, attempt rows"
+    },
+    {
+      "path": "src/payments/events.py",
+      "status": "modified",
+      "summary": "applied-once guard removed"
+    },
+    {
+      "path": "payment_requests",
+      "status": "added",
+      "summary": "one row per attempt, no uniqueness on order_id"
+    }
+  ],
+  "affected_surface": [
+    {
+      "area": "charge creation",
+      "why": "retry reaches the provider with a different key",
+      "evidence": [
+        "REF-1",
+        "REF-3"
+      ]
+    },
+    {
+      "area": "payment status",
+      "why": "status is written only on the success path",
+      "evidence": [
+        "REF-2"
+      ]
+    },
+    {
+      "area": "ledger writes",
+      "why": "consumer applies every delivery",
+      "evidence": [
+        "REF-2",
+        "REF-4"
+      ]
+    },
+    {
+      "area": "reconciliation job",
+      "why": "reads payments, never payment_requests",
+      "evidence": [
+        "REF-2"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "id": "RISK-001",
+      "title": "Double charge after a retried timeout",
+      "mechanism": "Provider charges successfully, the response times out, the loop generates a fresh idempotency key at retry.py:11 and charges again; the provider sees two distinct keys and cannot deduplicate.",
+      "invariant": "I-1 one order produces at most one provider charge",
+      "evidence": [
+        "src/payments/retry.py:11",
+        "REF-1",
+        "REF-2"
+      ],
+      "reality": "likely",
+      "severity": "critical",
+      "detectability": "invisible locally; only the provider ledger shows both charges",
+      "blast_radius": "every timed-out charge, about 0.4% of all charges per REF-1",
+      "existing_protection": "none; the stable per-order key was removed by this diff",
+      "disposition": "verify",
+      "cases": [
+        "CASE-001"
+      ],
+      "found_in_pass": 1
+    },
+    {
+      "id": "RISK-002",
+      "title": "Local status stuck in PENDING after an ambiguous timeout",
+      "mechanism": "All three attempts time out while one actually charged; the success branch never runs so the UPDATE at retry.py:18 never executes and the row stays PENDING.",
+      "invariant": "I-2 local status converges with the provider ledger",
+      "evidence": [
+        "src/payments/retry.py:18",
+        "REF-2"
+      ],
+      "reality": "possible",
+      "severity": "high",
+      "detectability": "support tickets days later",
+      "blast_radius": "orders whose final attempt is ambiguous",
+      "existing_protection": "hourly reconciliation job, but see RISK-004",
+      "disposition": "verify",
+      "cases": [
+        "CASE-002"
+      ],
+      "found_in_pass": 1
+    },
+    {
+      "id": "RISK-003",
+      "title": "Duplicate ledger rows on event redelivery",
+      "mechanism": "handle_payment_event applies the update and the ledger insert unconditionally; at-least-once delivery replays the event and inserts a second ledger row.",
+      "invariant": "I-3 consumers are idempotent under at-least-once delivery",
+      "evidence": [
+        "src/payments/events.py:3",
+        "REF-2"
+      ],
+      "reality": "likely",
+      "severity": "high",
+      "detectability": "ledger totals drift from provider totals",
+      "blast_radius": "every redelivered payment event",
+      "existing_protection": "none after this diff removed the applied-once guard",
+      "disposition": "verify",
+      "cases": [
+        "CASE-003"
+      ],
+      "found_in_pass": 1
+    },
+    {
+      "id": "RISK-004",
+      "title": "Reconciliation cannot see ambiguous attempts",
+      "mechanism": "The reconciliation job reads the payments table only; an attempt that charged but never updated payments leaves no signal it can act on, so RISK-002 is not repaired.",
+      "invariant": "I-2 local status converges within one reconciliation cycle",
+      "evidence": [
+        "REF-2",
+        "src/payments/retry.py:12"
+      ],
+      "reality": "possible",
+      "severity": "high",
+      "detectability": "only by comparing provider ledger totals with payments",
+      "blast_radius": "every order affected by RISK-002",
+      "existing_protection": "none; payment_requests is written but never read",
+      "disposition": "verify",
+      "cases": [
+        "CASE-004"
+      ],
+      "found_in_pass": 3
+    },
+    {
+      "id": "RISK-005",
+      "title": "Three immediate attempts amplify a provider incident",
+      "mechanism": "The loop retries with no backoff, so a provider slowdown triples request volume.",
+      "invariant": "provider rate limits are respected",
+      "evidence": [
+        "src/payments/retry.py:8"
+      ],
+      "reality": "possible",
+      "severity": "medium",
+      "detectability": "provider 429 rate in dashboards",
+      "blast_radius": "provider-wide during an incident",
+      "existing_protection": "provider-side rate limiting returns 429, which is not retried",
+      "disposition": "waived",
+      "cases": [],
+      "found_in_pass": 2
+    }
+  ],
+  "cases": [
+    {
+      "id": "CASE-001",
+      "title": "Lost response after a successful charge must not produce a second charge",
+      "risks": [
+        "RISK-001"
+      ],
+      "requirements": [
+        "PAY-142 never charge twice"
+      ],
+      "references": [
+        "REF-1",
+        "REF-2",
+        "REF-3"
+      ],
+      "objective": "After the provider charges and the response is lost, does the retry create a second charge?",
+      "why_it_catches_the_risk": "It forces the exact ambiguous-timeout path where retry.py:11 mints a new idempotency key, which is the mechanism of RISK-001.",
+      "preconditions": [
+        "Sandbox merchant account with an empty ledger",
+        "Order ORD-1 exists in status CREATED with amount 1000",
+        "payment_requests table empty for ORD-1"
+      ],
+      "environment": {
+        "build": "PR #67 head",
+        "services": "payments-api and provider sandbox via docker compose up -d",
+        "data": "scripts/seed-test-data.sh",
+        "clock": "fixed at 2026-01-01T00:00:00Z",
+        "network": "provider traffic routed through toxiproxy"
+      },
+      "fixtures": [
+        "Order ORD-1, amount 1000, card 4111111111111111, merchant_ref ORD-1"
+      ],
+      "fault_injection": [
+        "toxiproxy rule pay-timeout: allow the request, drop the response after 100 ms, applied to attempt 1 only"
+      ],
+      "steps": [
+        {
+          "n": 1,
+          "action": "Enable the toxiproxy rule pay-timeout limited to the first provider call, then POST /payments with order_id=ORD-1 amount=1000",
+          "expected": "The provider records exactly one charge for ORD-1 and the client observes a timeout",
+          "how_to_observe": "GET http://provider-sandbox/ledger?merchant_ref=ORD-1 returns 1 entry; client response is HTTP 504"
+        },
+        {
+          "n": 2,
+          "action": "Observe the attempt rows before the retry fires",
+          "expected": "payment_requests has exactly one row for ORD-1 with attempt=0 and a non-null idempotency_key",
+          "how_to_observe": "SELECT attempt, idempotency_key FROM payment_requests WHERE order_id='ORD-1' ORDER BY attempt"
+        },
+        {
+          "n": 3,
+          "action": "Disable the toxiproxy rule and let the retry loop run to completion",
+          "expected": "The retry reaches the provider with a different idempotency key and the provider creates a second charge",
+          "how_to_observe": "GET http://provider-sandbox/ledger?merchant_ref=ORD-1 and compare entry count and keys with step 1"
+        },
+        {
+          "n": 4,
+          "action": "Read the final local state",
+          "expected": "payments.status for ORD-1 is SUCCEEDED and payment_requests holds two rows with different keys",
+          "how_to_observe": "SELECT status FROM payments WHERE order_id='ORD-1'; SELECT count(*), count(distinct idempotency_key) FROM payment_requests WHERE order_id='ORD-1'"
+        }
+      ],
+      "intermediate_checks": [
+        "After step 2 the payments row is still PENDING, proving the retry has not yet run",
+        "The two attempt rows must be compared by idempotency_key, not by count alone"
+      ],
+      "expected_final_state": [
+        "The provider ledger holds exactly one entry of 1000 for merchant_ref ORD-1",
+        "payments.status is SUCCEEDED",
+        "Every payment_requests row for ORD-1 carries the same idempotency_key"
+      ],
+      "forbidden_outcomes": [
+        "Two or more provider ledger entries for ORD-1",
+        "Two payment_requests rows with different idempotency_key values",
+        "payments.status SUCCEEDED while the ledger holds zero entries"
+      ],
+      "oracle": {
+        "kind": "ledger",
+        "source": "provider sandbox ledger",
+        "query": "GET http://provider-sandbox/ledger?merchant_ref=ORD-1",
+        "expected": "exactly one entry, amount 1000, status captured"
+      },
+      "side_effect_count": "1 provider charge, 1 distinct idempotency key",
+      "evidence": [
+        "artifacts/logs/case-001-api.log",
+        "artifacts/db/case-001-payment_requests.csv",
+        "artifacts/reports/case-001-ledger.json"
+      ],
+      "cleanup": [
+        "Refund or void every sandbox charge for ORD-1",
+        "DELETE FROM payment_requests WHERE order_id='ORD-1'",
+        "Remove the toxiproxy rule pay-timeout"
+      ],
+      "repeat": 3,
+      "timeout": "5 minutes per repetition",
+      "flake_policy": "An inconsistent result across repetitions is a defect, not a flake: capture the ledger and all attempt rows and stop the run.",
+      "safety": "safe",
+      "review": {
+        "verdict": "accepted",
+        "findings": []
+      }
+    },
+    {
+      "id": "CASE-002",
+      "title": "All attempts time out after a real charge leaves a converging status",
+      "risks": [
+        "RISK-002"
+      ],
+      "requirements": [
+        "PAY-142 status converges"
+      ],
+      "references": [
+        "REF-1",
+        "REF-2"
+      ],
+      "objective": "When every attempt times out but the provider charged once, does the local status converge?",
+      "why_it_catches_the_risk": "It drives the branch where the success path at retry.py:18 never executes, which is the mechanism of RISK-002.",
+      "preconditions": [
+        "Order ORD-2 in CREATED with amount 500",
+        "Reconciliation job stopped"
+      ],
+      "environment": {
+        "build": "PR #67 head",
+        "services": "payments-api, provider sandbox, reconciliation worker stopped",
+        "data": "scripts/seed-test-data.sh",
+        "clock": "fixed",
+        "network": "toxiproxy"
+      },
+      "fixtures": [
+        "Order ORD-2, amount 500, merchant_ref ORD-2"
+      ],
+      "fault_injection": [
+        "toxiproxy drops every provider response for ORD-2 while allowing the requests through"
+      ],
+      "steps": [
+        {
+          "n": 1,
+          "action": "POST /payments for ORD-2 with the drop rule active",
+          "expected": "The provider records at least one charge and every attempt times out",
+          "how_to_observe": "GET http://provider-sandbox/ledger?merchant_ref=ORD-2"
+        },
+        {
+          "n": 2,
+          "action": "Wait for the loop to exhaust MAX_ATTEMPTS and observe the local row",
+          "expected": "payments.status for ORD-2 is PENDING and the API returned an error",
+          "how_to_observe": "SELECT status FROM payments WHERE order_id='ORD-2'"
+        },
+        {
+          "n": 3,
+          "action": "Start the reconciliation job and let one full cycle finish",
+          "expected": "The job resolves ORD-2 against the provider ledger and the status stops being PENDING",
+          "how_to_observe": "SELECT status FROM payments WHERE order_id='ORD-2' after the cycle; reconciliation log line reconcile.resolved order=ORD-2"
+        }
+      ],
+      "intermediate_checks": [
+        "payment_requests holds three rows for ORD-2 before reconciliation runs"
+      ],
+      "expected_final_state": [
+        "payments.status for ORD-2 is SUCCEEDED or FAILED, matching the provider ledger",
+        "The provider ledger and the local status agree"
+      ],
+      "forbidden_outcomes": [
+        "payments.status remains PENDING after a completed reconciliation cycle",
+        "Reconciliation issues an additional charge"
+      ],
+      "oracle": {
+        "kind": "database",
+        "source": "payments table compared with the provider ledger",
+        "query": "SELECT status FROM payments WHERE order_id='ORD-2'",
+        "expected": "SUCCEEDED when the ledger holds a charge, FAILED when it holds none"
+      },
+      "side_effect_count": "at most 1 provider charge and 0 additional charges during recovery",
+      "evidence": [
+        "artifacts/logs/case-002-reconcile.log",
+        "artifacts/db/case-002-payments.csv"
+      ],
+      "cleanup": [
+        "Refund the sandbox charge for ORD-2",
+        "Restart the reconciliation worker in its normal configuration"
+      ],
+      "repeat": 2,
+      "timeout": "15 minutes including one reconciliation cycle",
+      "flake_policy": "Retry once if the reconciliation cycle did not complete; a second non-converging result is a defect.",
+      "safety": "safe",
+      "review": {
+        "verdict": "accepted",
+        "findings": []
+      }
+    },
+    {
+      "id": "CASE-003",
+      "title": "Redelivered payment event must not duplicate the ledger row",
+      "risks": [
+        "RISK-003"
+      ],
+      "requirements": [
+        "I-3 idempotent consumers"
+      ],
+      "references": [
+        "REF-2",
+        "REF-4"
+      ],
+      "objective": "Does replaying one payment event a second time create a second ledger row?",
+      "why_it_catches_the_risk": "It replays the exact delivery the consumer at events.py:3 now applies without a guard.",
+      "preconditions": [
+        "Order ORD-3 paid once",
+        "ledger holds exactly one row for ORD-3"
+      ],
+      "environment": {
+        "build": "PR #67 head",
+        "services": "events consumer with replay enabled",
+        "data": "scripts/seed-test-data.sh",
+        "clock": "fixed",
+        "network": "direct"
+      },
+      "fixtures": [
+        "payment_event with order_id=ORD-3, amount=750, delivery_id=D-1"
+      ],
+      "fault_injection": [
+        "Replay delivery D-1 through the event replay hook after the first delivery is committed"
+      ],
+      "steps": [
+        {
+          "n": 1,
+          "action": "Deliver the payment event for ORD-3 once and wait for the consumer to commit",
+          "expected": "ledger holds exactly one row for ORD-3 with amount 750",
+          "how_to_observe": "SELECT count(*), sum(amount) FROM ledger WHERE order_id='ORD-3'"
+        },
+        {
+          "n": 2,
+          "action": "Replay the identical delivery D-1",
+          "expected": "The consumer recognizes the event as already applied and writes nothing",
+          "how_to_observe": "SELECT count(*), sum(amount) FROM ledger WHERE order_id='ORD-3' after the replay"
+        },
+        {
+          "n": 3,
+          "action": "Read the order flag",
+          "expected": "orders.paid stays true and was not written a second time",
+          "how_to_observe": "SELECT paid FROM orders WHERE id='ORD-3'; consumer log line event.skipped delivery=D-1"
+        }
+      ],
+      "intermediate_checks": [
+        "Consumer offset advances after both deliveries so the replay really reached the handler"
+      ],
+      "expected_final_state": [
+        "ledger holds exactly one row of 750 for ORD-3",
+        "orders.paid is true"
+      ],
+      "forbidden_outcomes": [
+        "Two ledger rows for ORD-3",
+        "A ledger sum of 1500 for ORD-3"
+      ],
+      "oracle": {
+        "kind": "database",
+        "source": "ledger table",
+        "query": "SELECT count(*), sum(amount) FROM ledger WHERE order_id='ORD-3'",
+        "expected": "count = 1 and sum = 750"
+      },
+      "side_effect_count": "exactly 1 ledger row per payment event",
+      "evidence": [
+        "artifacts/logs/case-003-consumer.log",
+        "artifacts/db/case-003-ledger.csv"
+      ],
+      "cleanup": [
+        "DELETE FROM ledger WHERE order_id='ORD-3'",
+        "Reset the consumer offset to its pre-test value"
+      ],
+      "repeat": 2,
+      "timeout": "5 minutes",
+      "flake_policy": "A duplicated row on any repetition is a defect; do not average across runs.",
+      "safety": "safe",
+      "review": {
+        "verdict": "accepted",
+        "findings": []
+      }
+    },
+    {
+      "id": "CASE-004",
+      "title": "Reconciliation must act on attempts recorded only in payment_requests",
+      "risks": [
+        "RISK-004"
+      ],
+      "requirements": [
+        "I-2 convergence"
+      ],
+      "references": [
+        "REF-2"
+      ],
+      "objective": "Can reconciliation repair an order whose only trace of a charge is an attempt row?",
+      "why_it_catches_the_risk": "It creates the exact state RISK-004 predicts: a charged attempt invisible to a payments-only reconciliation query.",
+      "preconditions": [
+        "Order ORD-4 in PENDING",
+        "One payment_requests row for ORD-4 whose key was charged at the provider",
+        "No payments row update for ORD-4"
+      ],
+      "environment": {
+        "build": "PR #67 head",
+        "services": "reconciliation worker only",
+        "data": "hand-seeded state described in preconditions",
+        "clock": "fixed",
+        "network": "direct"
+      },
+      "fixtures": [
+        "ORD-4 attempt row with idempotency_key K-4 charged for 300 at the provider"
+      ],
+      "fault_injection": [
+        "None; the state is seeded directly to isolate the reconciliation query"
+      ],
+      "steps": [
+        {
+          "n": 1,
+          "action": "Run one reconciliation cycle",
+          "expected": "The job inspects the provider ledger for every order with an unresolved attempt, including ORD-4",
+          "how_to_observe": "reconciliation log lines listing the orders inspected in this cycle"
+        },
+        {
+          "n": 2,
+          "action": "Read the resulting payment state",
+          "expected": "payments.status for ORD-4 matches the provider ledger",
+          "how_to_observe": "SELECT status FROM payments WHERE order_id='ORD-4'"
+        }
+      ],
+      "intermediate_checks": [
+        "The cycle log must name ORD-4; absence of the order in the log is the failure signal"
+      ],
+      "expected_final_state": [
+        "payments.status for ORD-4 is SUCCEEDED",
+        "No additional provider charge was issued"
+      ],
+      "forbidden_outcomes": [
+        "ORD-4 absent from the reconciliation cycle",
+        "A second charge created during recovery"
+      ],
+      "oracle": {
+        "kind": "database",
+        "source": "payments table compared with the provider ledger for K-4",
+        "query": "SELECT status FROM payments WHERE order_id='ORD-4'",
+        "expected": "SUCCEEDED"
+      },
+      "side_effect_count": "0 new provider charges",
+      "evidence": [
+        "artifacts/logs/case-004-reconcile.log"
+      ],
+      "cleanup": [
+        "Remove the seeded ORD-4 rows",
+        "Refund the sandbox charge for K-4"
+      ],
+      "repeat": 1,
+      "timeout": "15 minutes",
+      "flake_policy": "A single failure is conclusive because the state is seeded deterministically.",
+      "safety": "safe",
+      "review": {
+        "verdict": "accepted",
+        "findings": []
+      }
+    }
+  ],
+  "environment": {
+    "available": [
+      "docker compose services",
+      "provider sandbox",
+      "scripts/seed-test-data.sh",
+      "fixed clock"
+    ],
+    "required": [
+      "toxiproxy rule that drops a response after the request is delivered",
+      "provider sandbox ledger read access by merchant_ref",
+      "event replay hook for a single delivery id",
+      "ability to stop and start the reconciliation worker",
+      "artifacts/ paths for logs, database snapshots, and reports"
+    ],
+    "missing": [
+      {
+        "capability": "single-delivery event replay hook",
+        "needed_for": [
+          "CASE-003"
+        ],
+        "request": "Add a replay endpoint or test hook that redelivers one payment_event by delivery_id without resetting the whole consumer offset."
+      }
+    ],
+    "setup": [
+      {
+        "step": "reset the test database",
+        "command": "scripts/reset-test-db.sh"
+      },
+      {
+        "step": "seed orders ORD-1 to ORD-4",
+        "command": "scripts/seed-test-data.sh"
+      },
+      {
+        "step": "start services",
+        "command": "docker compose up -d"
+      }
+    ]
+  },
+  "execution_plan": [
+    {
+      "order": 1,
+      "case": "CASE-001",
+      "rationale": "critical severity, cheapest deterministic reproduction",
+      "stop_on_fail": true
+    },
+    {
+      "order": 2,
+      "case": "CASE-003",
+      "rationale": "independent of the charge path, runs while the ledger is clean",
+      "stop_on_fail": false
+    },
+    {
+      "order": 3,
+      "case": "CASE-002",
+      "rationale": "needs a full reconciliation cycle, so it runs after the fast cases",
+      "stop_on_fail": false
+    },
+    {
+      "order": 4,
+      "case": "CASE-004",
+      "rationale": "depends on the seeded state left by CASE-002",
+      "stop_on_fail": false
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q-1",
+      "question": "Is a stable per-order idempotency key the intended fix, or does the provider deduplicate by merchant_ref?",
+      "why": "It decides whether RISK-001 is a code defect or a provider-contract assumption, and therefore whether CASE-001 is expected to pass or fail.",
+      "blocking": true,
+      "owner": "human"
+    }
+  ],
+  "waivers": [
+    {
+      "risk": "RISK-005",
+      "reason": "Provider rate limiting returns 429, which this loop does not retry, so amplification is bounded at three attempts per order.",
+      "owner": "payments-lead",
+      "revisit": "if MAX_ATTEMPTS rises above 3 or a backoff-free retry is added elsewhere"
+    }
+  ]
+}

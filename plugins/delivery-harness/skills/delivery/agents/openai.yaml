@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delivery Harness"
+  short_description: "Product context, precise specs, verified PRs"
+  default_prompt: "Use $delivery to take this change from intent to a verified PR."

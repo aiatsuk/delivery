@@ -1,0 +1,18 @@
+{
+  "goal": "Document the local test command in the contributor guide.",
+  "non_goals": ["Do not change application code, dependencies, deployment or product behavior."],
+  "scores": {"product": 0, "ux": 0, "technical": 0, "integration": 0, "risk": 0, "qa": 0, "rollout": 0, "uncertainty": 1},
+  "triggers": [],
+  "decisions": [{"status": "not-material", "reason": "The existing tested command is documented without changing behavior."}],
+  "requirements": [{"id": "document-test-command", "behavior": "The contributor guide contains the repository's actual local test command.", "oracle": "The guide contains the exact verified command and the diff contains only the intended guide edit."}],
+  "tasks": [{
+    "id": "guide", "title": "Document the verified test command", "acceptance": "One accurate contributor-guide edit, with no unrelated changes.",
+    "paths": ["CONTRIBUTING.md"], "depends_on": [], "resources": [], "requirements": ["document-test-command"],
+    "gates": [{"command": ["git", "diff", "--check"], "risk": "safe", "oracle": "Git reports no whitespace errors in the intended diff.", "cleanup": "No resources or files are created."}]
+  }],
+  "verification": [{
+    "id": "guide-content", "command": ["python3", "-B", "-c", "from pathlib import Path; assert 'python3 -B -m unittest discover -s tests -t .' in Path('CONTRIBUTING.md').read_text()"],
+    "risk": "safe", "oracle": "The contributor guide includes the exact test command confirmed for this repository.",
+    "cleanup": "No resources or files are created.", "requirements": ["document-test-command"]
+  }]
+}

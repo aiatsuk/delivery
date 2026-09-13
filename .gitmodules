@@ -1,0 +1,12 @@
+[submodule "upstream/orchestrate"]
+	path = upstream/orchestrate
+	url = https://github.com/aiatsuk/orchestrate.git
+[submodule "upstream/spec-driven-development"]
+	path = upstream/spec-driven-development
+	url = https://github.com/aiatsuk/spec-driven-development.git
+[submodule "upstream/product-driven-development"]
+	path = upstream/product-driven-development
+	url = https://github.com/aiatsuk/product-driven-development.git
+[submodule "upstream/factory"]
+	path = upstream/factory
+	url = https://github.com/aiatsuk/factory.git
