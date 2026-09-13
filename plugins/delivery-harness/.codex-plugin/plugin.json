@@ -1,0 +1,26 @@
+{
+  "name": "delivery-harness",
+  "version": "1.1.0",
+  "repository": "https://github.com/aiatsuk/delivery",
+  "description": "One product-to-PR workflow with approved specifications, isolated agents, evidence-bound verification and safe Git delivery.",
+  "author": {
+    "name": "Andrei Iatsuk"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Delivery Harness",
+    "shortDescription": "Product context, precise specs, verified delivery.",
+    "longDescription": "A self-contained coordinator for product memory, risk-proportional specifications, isolated task execution, independent review and a fresh-main worktree-to-PR lifecycle. Human approval remains explicit for material decisions, side effects and merging.",
+    "developerName": "Andrei Iatsuk",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $delivery to take this change from intent to a verified PR.",
+      "Use $delivery to resume an existing run and recheck its evidence."
+    ]
+  }
+}

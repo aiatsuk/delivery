@@ -1,0 +1,55 @@
+# Project verification configuration for the delivery check engine.
+# Copy to one of: .spec/verification.yml, .spec/verification.yaml, .spec/verification.json,
+# spec/verification.yml. The nearest file found walking up from the check directory wins.
+# Every key is optional; omitted keys fall back to the defaults documented here.
+# A supplied --project or --config is remembered when the package lives outside the repository.
+# Without PyYAML, use the block-mapping and scalar-list syntax shown here, or a JSON config.
+
+verification:
+  default_mode: auto
+  minimum_iterations: 3
+  maximum_iterations: 6
+
+  critical_areas:
+    - payments
+    - authentication
+    - permissions
+    - persistence
+    - migrations
+    - concurrency
+    - agent-actions
+    - external-integrations
+
+  required_risk_coverage:
+    critical: 100
+    high: 100
+    medium: 70
+
+  # Where packages are written. `global` keeps them on the machine and out of the repository's
+  # diff; `repo` versions them alongside the code under spec/<kind>/<slug>/.
+  artifact_store: global
+
+  require_actual_effect_oracle: true
+  require_cleanup: true
+  require_evidence: true
+  require_references: true
+
+# What the agent may actually use when planning checks. Missing entries become explicit
+# capability requests in the brief instead of silently weakened cases.
+test_environment:
+  database_reset: scripts/reset-test-db.sh
+  seed_data: scripts/seed-test-data.sh
+  start_services: docker compose up -d
+  stop_services: docker compose down
+
+fault_injection:
+  network_proxy: toxiproxy
+  clock_control: true
+  event_replay: true
+  process_restart: true
+
+evidence:
+  logs: artifacts/logs/
+  screenshots: artifacts/screenshots/
+  database_snapshots: artifacts/db/
+  reports: artifacts/reports/

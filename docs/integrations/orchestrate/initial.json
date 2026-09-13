@@ -1,0 +1,25 @@
+{
+  "source_revision": "6117a3461c15282949cecbea2c1f62d5d3967099",
+  "disposition": "integrated",
+  "rationale": "Existing selective 0.4.1 integration retained: independent dispatch/review, transactional ordered patches, scoped staging, conservative cleanup, analyzer diagnostics and async review. Upstream model pins, broad staging and installers are intentionally excluded.",
+  "reviewer": "Maintainer source comparison; independent repository review recorded in docs/VALIDATION.md",
+  "tests": "Run the complete plugin suite and tooling suite; current observed results and limitations are recorded in docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/SKILL.md",
+    "skill/scripts",
+    "skill/references"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py"
+  ]
+}

@@ -1,0 +1,32 @@
+name: Check delivery
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'chore/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - run: make check
+      - run: make test
+      - name: Export and smoke-test without upstream checkouts
+        env:
+          PACKAGE_PARENT: ${{ runner.temp }}/delivery-package
+        run: |
+          python3 -S -B tools/package.py --output "$PACKAGE_PARENT/delivery-harness"
+          cd "$PACKAGE_PARENT/delivery-harness"
+          python3 -S -B scripts/validate_bundle.py .
+          python3 -S -B skills/delivery/scripts/delivery.py doctor

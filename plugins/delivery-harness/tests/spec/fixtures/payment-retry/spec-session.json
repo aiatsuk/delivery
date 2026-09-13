@@ -1,0 +1,93 @@
+{
+  "actual_change_surface": [],
+  "approval": null,
+  "authorization": null,
+  "baseline": null,
+  "blocked_from": null,
+  "blocking_decisions": [],
+  "check_mode": "deep",
+  "check_mode_reason": "touches critical areas: payments",
+  "completed_phases": [
+    "CHECK_NEW",
+    "CHECK_SOURCE_RESOLVED",
+    "CHECK_CHANGE_ANALYZED",
+    "CHECK_SURFACE_MAPPED",
+    "CHECK_RISK_ITERATING",
+    "CHECK_CASES_DRAFTED",
+    "CHECK_CASES_REVIEWED",
+    "CHECK_ENVIRONMENT_PLANNED"
+  ],
+  "critical_findings": [],
+  "expected_change_surface": [],
+  "iterations": [
+    {
+      "at": "2026-08-03T14:57:26+00:00",
+      "kind": "broad",
+      "material": true,
+      "new_critical": 1,
+      "new_high": 3,
+      "new_medium": 4,
+      "pass": 1,
+      "summary": "8 candidates: double charge on retry, status stuck PENDING, duplicate ledger on redelivery, no backoff, attempt rows unbounded, non-timeout errors unretried, provider rate limit, support ambiguity",
+      "surface_changed": false,
+      "uncovered_invariants": 0
+    },
+    {
+      "at": "2026-08-03T14:57:27+00:00",
+      "kind": "realism",
+      "material": true,
+      "new_critical": 0,
+      "new_high": 0,
+      "new_medium": 0,
+      "pass": 2,
+      "summary": "dropped non-timeout-errors (ticket scopes retry to timeouts) and support-ambiguity (no invariant); kept 1 critical + 2 high + 1 medium; added payment_requests table to the surface",
+      "surface_changed": true,
+      "uncovered_invariants": 0
+    },
+    {
+      "at": "2026-08-03T14:57:27+00:00",
+      "kind": "adversarial",
+      "material": true,
+      "new_critical": 0,
+      "new_high": 1,
+      "new_medium": 0,
+      "pass": 3,
+      "summary": "variations: client retry concurrent with server retry; SIGKILL between provider success and status write; event redelivered after consumer restart; found reconciliation reads payments not payment_requests",
+      "surface_changed": false,
+      "uncovered_invariants": 0
+    },
+    {
+      "at": "2026-08-03T14:57:27+00:00",
+      "kind": "adversarial",
+      "material": false,
+      "new_critical": 0,
+      "new_high": 0,
+      "new_medium": 0,
+      "pass": 4,
+      "summary": "boundary sweep: attempt 3 of 3, clock skew, partial provider outage, old clients - no new material risk",
+      "surface_changed": false,
+      "uncovered_invariants": 0
+    },
+    {
+      "at": "2026-08-03T14:57:27+00:00",
+      "kind": "adversarial",
+      "material": false,
+      "new_critical": 0,
+      "new_high": 0,
+      "new_medium": 0,
+      "pass": 5,
+      "summary": "second quiet pass: no new material risk",
+      "surface_changed": false,
+      "uncovered_invariants": 0
+    }
+  ],
+  "material_findings": [],
+  "mode": "check",
+  "revision": 13,
+  "rigor": "standard",
+  "schema_version": 1,
+  "session_id": "pay-142-retry",
+  "spec_version": 1,
+  "state": "CHECK_BRIEF_READY",
+  "history": []
+}

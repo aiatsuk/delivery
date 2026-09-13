@@ -1,0 +1,19 @@
+{
+  "source_revision": "ebe92fbdda305fbf117badb16fecff233d5de287",
+  "disposition": "integrated",
+  "rationale": "Pinned public skill tree is byte-identical to the previously integrated 0.5.0 source. Retain explicit Markdown ownership and opt-in bounded session evidence, including the adapted path-safety fix. No native session data is shipped.",
+  "reviewer": "Maintainer source comparison; independent repository review recorded in docs/VALIDATION.md",
+  "tests": "Run the complete plugin suite and tooling suite; current observed results and limitations are recorded in docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/product-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/internal/product/README.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/artifacts.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/session-evidence.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/session_evidence.py",
+    "plugins/delivery-harness/skills/delivery/scripts/product.py",
+    "plugins/delivery-harness/tests/product_memory/test_session_evidence.py",
+    "plugins/delivery-harness/tests/test_product.py"
+  ]
+}

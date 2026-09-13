@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "session_id": "replace-with-stable-slug",
+  "state": "NEW",
+  "revision": 0,
+  "spec_version": 1,
+  "rigor": "standard",
+  "completed_phases": [],
+  "blocking_decisions": [],
+  "critical_findings": [],
+  "approval": null,
+  "baseline": null,
+  "expected_change_surface": [],
+  "actual_change_surface": [],
+  "material_findings": [],
+  "blocked_from": null,
+  "history": []
+}

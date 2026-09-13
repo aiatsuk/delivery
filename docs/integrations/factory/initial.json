@@ -1,0 +1,17 @@
+{
+  "source_revision": "c431b34e4acd6882f3a03635d8aea64bfec6e650",
+  "disposition": "integrated",
+  "rationale": "Pinned public skill trees are byte-identical to the previously integrated 1.0.1 source. Classification, proportional gates, rework and explicit side effects remain expressed in the unified coordinator rather than separate top-level factory flows.",
+  "reviewer": "Maintainer source comparison; independent repository review recorded in docs/VALIDATION.md",
+  "tests": "Run the complete plugin suite and tooling suite; current observed results and limitations are recorded in docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_run_engine.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py"
+  ]
+}

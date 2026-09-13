@@ -1,0 +1,42 @@
+{
+  "source_revision": "40b0c1fda8ac84d4f344694b3fcfe8582dd33ae2",
+  "disposition": "integrated",
+  "rationale": "Pinned public skill tree is byte-identical to the previously integrated 1.0.0 source. Retain the adapted specification/check engine, strict approval/content binding, canonical repository identity, safe parser and regression fixes; do not import the upstream coordinator.",
+  "reviewer": "Maintainer source comparison; independent repository review recorded in docs/VALIDATION.md",
+  "tests": "Run the complete plugin suite and tooling suite; current observed results and limitations are recorded in docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/spec-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/case-review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/check-source.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/check.template.json",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/decisions.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/design.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/feature-model.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/impact-analysis.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/impact-map.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/implementation-evidence.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/intent.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/post-implementation-review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/proposal.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/review-brief.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/spec-session.template.json",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/spec.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/tasks.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/test-plan.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-brief.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-cases.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-config.template.yaml",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-report.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/engine-guide.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/artifact-contract.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/test-case-quality.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/verification.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/scripts/spec_flow.py",
+    "plugins/delivery-harness/tests/spec/test_delivery_spec_regressions.py",
+    "plugins/delivery-harness/tests/spec/test_spec_flow.py",
+    "plugins/delivery-harness/tests/test_rich_integration.py"
+  ]
+}
