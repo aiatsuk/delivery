@@ -8,7 +8,7 @@ available tools before starting. Git is required; Python 3.10+ on macOS/Linux is
 the supported deterministic runtime. `gh` and working authentication are needed
 only for GitHub publication. Windows locking/process support is not implemented.
 
-Use the same shipped skill/scripts on the supported instruction hosts. Plugin
+Use the same shipped skill/scripts on both supported instruction hosts. Plugin
 manifest compatibility is distinct from actually launching each host. If a CLI or
 agent facility is missing, say so; do not simulate successful installation or work.
 
@@ -43,15 +43,6 @@ report contract. Do not require a second orchestration plugin. Keep configured
 models unless explicitly selected by the user. If the host cannot resume a prior
 handle, record its observed absence, preserve the worktree, and register a fresh
 dispatch for an authorized retry. Never reuse a prior report as its new result.
-
-## Cursor
-
-Use the available Agent/subagent facility with the same ownership and report
-contract. Invoke the plugin skill as `/delivery` or by asking to use Delivery
-Harness. Do not require a second orchestration plugin. Keep configured models
-unless explicitly selected by the user. If the host cannot resume a prior handle,
-record its observed absence, preserve the worktree, and register a fresh dispatch
-for an authorized retry. Never reuse a prior report as its new result.
 
 ## Dispatch brief
 
