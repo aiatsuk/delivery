@@ -13,7 +13,11 @@ def validate(root):
     errors = []
     root = Path(root).resolve()
     manifests = []
-    for relative in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
+    for relative in (
+        ".codex-plugin/plugin.json",
+        ".claude-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
+    ):
         try:
             manifest = json.loads((root / relative).read_text())
             manifests.append(manifest)
@@ -24,7 +28,7 @@ def validate(root):
             if "[TODO:" in json.dumps(manifest): errors.append(f"{relative}: unfinished manifest")
         except (OSError, ValueError) as error:
             errors.append(f"{relative}: {error}")
-    if len(manifests) == 2 and manifests[0]["version"].split("+")[0] != manifests[1]["version"].split("+")[0]:
+    if manifests and len({manifest["version"].split("+")[0] for manifest in manifests}) != 1:
         errors.append("Host manifest base versions differ")
     skills = sorted(str(p.relative_to(root)) for p in root.rglob("SKILL.md"))
     if skills != ["skills/delivery/SKILL.md"]: errors.append(f"Only one coordinator may be discoverable: {skills}")

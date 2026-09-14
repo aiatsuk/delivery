@@ -10,7 +10,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ("README.md", "PROVENANCE.md", "VERIFICATION.md", "NOTICE.md")
-DIRS = (".codex-plugin", ".claude-plugin", "skills", "scripts", "tests", "examples", "notices")
+DIRS = (".codex-plugin", ".claude-plugin", ".cursor-plugin", "skills", "scripts", "tests", "examples", "notices")
 
 
 def git(root, *args):

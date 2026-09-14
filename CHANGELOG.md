@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+- Add Cursor plugin and marketplace manifests so the existing harness can be
+  installed from this repository in Cursor.
+
 ## 1.1.0
 
 - Put the self-contained plug-in under version control with four pinned public

@@ -53,6 +53,11 @@ one discoverable skill and works without initialized upstream submodules.
 - Claude Code: load `plugins/delivery-harness` with its local plug-in loader and
   invoke `/delivery-harness:delivery`, or link its `skills/delivery` as the global
   `/delivery` skill.
+- Cursor: install the nested `plugins/delivery-harness` directory (this repository
+  also ships `.cursor-plugin/marketplace.json` for GitHub import). Copy that
+  directory to `~/.cursor/plugins/local/delivery-harness` and reload Cursor, or
+  import `https://github.com/aiatsuk/delivery` from Customize and install
+  `delivery-harness`. Invoke `/delivery` or ask to use Delivery Harness.
 
 Describe the task normally. Material specs stop for approval; a PR stops for
 review and exact-PR merge authorization. Runtime host compatibility and verification

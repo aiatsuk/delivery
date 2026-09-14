@@ -16,6 +16,7 @@ Invoke the `delivery` skill from this plugin, then describe the task normally:
 
 - Codex plugin skill: `$delivery-harness:delivery Fix … and open a PR.`
 - Claude Code plugin skill: `/delivery-harness:delivery Fix … and open a PR.`
+- Cursor plugin skill: `/delivery Fix … and open a PR.`
 - Resume: `Use Delivery Harness to resume <run root>.`
 - Merge: `PR #… has been reviewed; authorize its merge through Delivery Harness.`
 
@@ -66,10 +67,11 @@ native-history scan, production deployment or background monitoring.
 
 ## Local installation
 
-The bundle has both `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json`.
-Codex's personal marketplace can register the durable source at
-`~/plugins/delivery-harness`; install the `delivery-harness@personal` entry using
-the normal host plugin installer. Start a fresh thread after installation.
+The bundle has `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json` and
+`.cursor-plugin/plugin.json`. Codex's personal marketplace can register the
+durable source at `~/plugins/delivery-harness`; install the
+`delivery-harness@personal` entry using the normal host plugin installer. Start
+a fresh thread after installation.
 
 For Claude Code, a host supporting local plugin directories can load this same
 bundle with `claude --plugin-dir /absolute/path/to/delivery-harness`, or add it
@@ -77,6 +79,12 @@ through that host's supported local marketplace installation flow. Do not copy
 individual engine scripts into separate skills. Manifest validation alone does
 not prove the Claude runtime was exercised; see the verification report shipped
 with the installed bundle for what was actually run.
+
+For Cursor, copy this directory to `~/.cursor/plugins/local/delivery-harness` and
+reload the window, or import the Delivery repository from Customize (it includes
+`.cursor-plugin/marketplace.json`) and install `delivery-harness`. A Cloud Agent
+cannot write the plugin into a desktop Cursor home directory. Manifest
+validation alone does not prove the Cursor runtime was exercised.
 
 A shared global-skill installation can instead link `~/.claude/skills/delivery`
 to this bundle's `skills/delivery` directory. That form is invoked as `/delivery`,
