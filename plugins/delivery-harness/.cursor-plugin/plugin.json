@@ -1,0 +1,10 @@
+{
+  "name": "delivery-harness",
+  "version": "1.1.0",
+  "description": "One evidence-bound product-to-PR delivery workflow.",
+  "author": {"name": "Andrei Iatsuk"},
+  "homepage": "https://github.com/aiatsuk/delivery",
+  "repository": "https://github.com/aiatsuk/delivery",
+  "keywords": ["delivery", "product", "specification", "verification", "pr"],
+  "skills": "./skills/"
+}
