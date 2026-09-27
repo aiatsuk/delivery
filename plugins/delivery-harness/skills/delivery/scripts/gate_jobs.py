@@ -30,15 +30,31 @@ def _engine():
     return run_engine
 
 
+def _exited_child(pid: int) -> bool:
+    """Whether pid is this process's exited, not yet reaped child; never reaps it."""
+    if not hasattr(os, "waitid"):
+        return False
+    try:
+        status = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except OSError:  # ChildProcessError: not a child of this process.
+        return False
+    return status is not None and status.si_pid == pid
+
+
 def _observe(pid: int) -> dict:
     """Inspect start identity, parent and zombie state without executing ps."""
     e = _engine()
     e.require(type(pid) is int and pid > 0, "invalid_process", "A process ID must be a positive integer.")
+    # A child that exited before Popen.wait() may be neither probed nor described
+    # by the host; its pending exit status still proves this runner's child ended.
+    exited = {"pid": pid, "alive": False, "identity": None, "parent": os.getpid()}
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return {"pid": pid, "alive": False, "identity": None}
     except PermissionError as exc:
+        if _exited_child(pid):
+            return exited
         raise e.RunError("process_unknown", "Process liveness is not observable; preserve the job.") from exc
     if sys.platform == "darwin":
         # Darwin's proc_bsdinfo has a stable 136-byte public ABI. Only its PID,
@@ -49,10 +65,14 @@ def _observe(pid: int) -> dict:
         buffer = ctypes.create_string_buffer(136)
         size = library.proc_pidinfo(pid, 3, 0, buffer, len(buffer))
         if size != len(buffer):
+            if _exited_child(pid):
+                return exited
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 return {"pid": pid, "alive": False, "identity": None}
+            except PermissionError as exc:
+                raise e.RunError("process_unknown", "Process liveness is not observable; preserve the job.") from exc
             raise e.RunError("process_unknown", "The host cannot inspect the process start identity; preserve the job.")
         number = lambda start, end: int.from_bytes(buffer.raw[start:end], sys.byteorder)
         e.require(number(12, 16) == pid, "process_identity_drift", "Observed process identity changed during inspection.")
@@ -221,6 +241,19 @@ def set_process(pid: int) -> None:
     _write_metadata(context["directory"], run["gate_jobs"][context["id"]])
 
 
+def defer_receipt(receipt: dict, admit) -> None:
+    """Append the returned receipt in the checkpoint that records its job outcome.
+
+    admit(run) runs under the run lock first; its RunError keeps the receipt out,
+    becomes the job's recorded error and is raised after that checkpoint.
+    """
+    e = _engine()
+    context = _CURRENT.get()
+    e.require(context is not None, "missing_gate_job", "A gate receipt requires an active guarded gate.")
+    e.require(isinstance(receipt, dict) and callable(admit) and "receipt" not in context, "invalid_receipt", "A gate job records exactly one receipt.")
+    context["receipt"] = (receipt, admit)
+
+
 def _children_dead(job):
     for child in job.get("children", []):
         observed = _observe(child["pid"])
@@ -245,25 +278,34 @@ def _finish(context, result=None, error=None):
         dead = _children_dead(current)
     except e.RunError:
         dead = False
+    deferred, admit = context.pop("receipt", (None, None))
     receipt = copy.deepcopy(result) if isinstance(result, dict) else None
     if receipt is not None:
         receipt["job_id"] = context["id"]
+    refused = []
     def update(run):
         job = _job(run, context)
-        job["outcome"] = {"error": str(error) if error else None, "returned": result is not None,
+        if deferred is not None and deferred is result:
+            # One checkpoint writes the receipt and its job outcome, so a crash
+            # cannot leave a receipt whose job outcome was never recorded.
+            try:
+                admit(run)
+                run["gates"].append(copy.deepcopy(receipt))
+            except e.RunError as exc:
+                refused.append(exc)
+        failure, kept = (refused[0], None) if refused else (error, receipt)
+        job["outcome"] = {"error": str(failure) if failure else None, "returned": result is not None and not refused,
                           "children_confirmed_ended": dead}
         if dead:
-            job["status"] = "SUCCEEDED" if error is None and receipt and receipt.get("passed") is True else "FAILED"
+            job["status"] = "SUCCEEDED" if failure is None and kept and kept.get("passed") is True else "FAILED"
             job["finished_at"] = e.now()
-        if receipt is not None:
-            job["receipt"] = receipt
-            job["receipt_hash"] = e.digest(receipt)
-            for saved in reversed(run["gates"]):
-                if saved == result:
-                    saved["job_id"] = context["id"]
-                    break
+        if kept is not None:
+            job["receipt"] = kept
+            job["receipt_hash"] = e.digest(kept)
     run = _checkpoint(context["root"], "gate_job_finished" if dead else "gate_job_requires_recovery", update)
     _write_metadata(context["directory"], run["gate_jobs"][context["id"]])
+    if refused:
+        raise refused[0]
     if not dead and error is None:
         raise e.RunError("gate_process_alive", "A registered gate child is still alive or unobservable; the job remains RUNNING and holds its recorded resources.")
     if isinstance(result, dict):

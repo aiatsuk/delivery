@@ -680,6 +680,18 @@ def report_task(root, task_id: str, actor: str, result: dict, expected_revision=
     return load(root)
 
 
+def _signal_gate_group(process, number) -> None:
+    # macOS refuses to signal a group whose only member is the exited, not yet
+    # reaped leader. Reap that leader instead of reporting a command that never ran.
+    try:
+        os.killpg(process.pid, number)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        if process.poll() is None:
+            raise
+
+
 @gate_jobs.guarded
 def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None, gate_index: int = 0, timeout: int = 300, expected_revision=None) -> dict:
     require(1 <= timeout <= 3600, "invalid_timeout", "Gate timeout must be between 1 and 3600 seconds.")
@@ -737,33 +749,21 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
                     code = process.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                    _signal_gate_group(process, signal.SIGTERM)
                     try:
                         process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        _signal_gate_group(process, signal.SIGKILL)
                         process.wait()
                     code = process.returncode
                 except BaseException:
                     # This process group belongs to this invocation. A failed
                     # identity checkpoint must not leave its child running.
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                    _signal_gate_group(process, signal.SIGTERM)
                     try:
                         process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        _signal_gate_group(process, signal.SIGKILL)
                         process.wait()
                     raise
             except OSError as error:
@@ -779,9 +779,11 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
                "duration_seconds": round(time.monotonic() - start, 3), "at": now(), "snapshot": before,
                "unchanged": before["content"] == after["content"], "log": name, "log_hash": hashlib.sha256(Path(name).read_bytes()).hexdigest()}
     receipt["passed"] = code == 0 and not timed_out and receipt["unchanged"] and len(attempts) == repeat
-    with transaction(root, "gate_executed") as current:
+    def admit(current):
+        require(current["state"] not in TERMINAL, "terminal_run", "This run has ended.")
         require(current["plan_hash"] == run["plan_hash"], "plan_drift", "Plan changed while gate executed.")
-        current["gates"].append(receipt)
+    # The job's finishing checkpoint appends the receipt; see gate_jobs.defer_receipt.
+    gate_jobs.defer_receipt(receipt, admit)
     return receipt
 
 
