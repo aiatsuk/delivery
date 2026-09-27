@@ -35,10 +35,10 @@ def parser():
     listing.add_argument("--repo", required=True)
     listing.add_argument("--store")
     sub.add_parser("doctor", help="Check local capabilities without network or installation changes.")
-    for name in ("plan", "approve", "authorize", "start", "status", "task-prepare", "task-register", "task-report", "task-import", "task-rework", "fix-register", "fix-report", "gate", "gate-recover", "review", "review-token", "review-import", "integrate", "ready", "capture-verification", "commit", "publish", "refresh", "merge", "cleanup", "finish-local", "block", "resume", "revise"):
+    for name in ("plan", "approve", "authorize", "start", "status", "task-prepare", "task-register", "task-report", "task-import", "task-abandon", "task-rework", "fix-register", "fix-report", "gate", "gate-recover", "review", "review-token", "review-import", "integrate", "ready", "capture-verification", "commit", "publish", "refresh", "merge", "cleanup", "finish-local", "block", "resume", "revise"):
         q = sub.add_parser(name)
         q.add_argument("--run", required=True)
-        if name not in {"status", "review-token"}:
+        if name != "status":
             q.add_argument("--expected-revision", type=int)
         if name in {"plan", "task-report", "fix-report"}:
             q.add_argument("--file", required=True)
@@ -46,9 +46,10 @@ def parser():
             q.add_argument("--actor", required=True)
             q.add_argument("--evidence-file", required=True)
         if name == "authorize":
-            q.add_argument("--scope", required=True, choices=["implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "standing-approval"])
+            q.add_argument("--scope", required=True, choices=["implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "rework-budget", "standing-approval"])
             q.add_argument("--target", action="append", dest="targets", help="Exact task:index or case ID; repeat for each approved side-effect gate.")
-            q.add_argument("--count", type=int, help="Extra integration-fix rounds (1-3) for --scope fix-budget.")
+            q.add_argument("--count", type=int, help="Extra rounds: 1-3 integration-fix rounds for --scope fix-budget, 1-2 rounds for --scope rework-budget.")
+            q.add_argument("--task", help="Task named by the budget blocker, for --scope rework-budget; omit it for an integrated block.")
             q.add_argument("--until", help="Standing approval end: ISO-8601 with an offset or Z, at most 30 days ahead.")
             q.add_argument("--max-level", choices=["small", "medium", "large"], help="Highest plan level a standing approval covers.")
             q.add_argument("--trigger", action="append", dest="triggers", help="Risk trigger a standing approval covers; repeat for each.")
@@ -77,7 +78,7 @@ def parser():
         if name == "review-import":
             q.add_argument("--task")
             q.add_argument("--lens", action="append", dest="lenses", required=True)
-        if name in {"task-rework", "block", "resume", "revise", "capture-verification", "fix-register"}:
+        if name in {"task-rework", "task-abandon", "block", "resume", "revise", "capture-verification", "fix-register"}:
             q.add_argument("--reason", required=True)
         if name == "commit":
             q.add_argument("--message-file", required=True)
@@ -136,20 +137,21 @@ def dispatch(a):
     revision = getattr(a, "expected_revision", None)
     if a.command == "status": return engine.status(a.run)
     if a.command == "plan": return engine.set_plan(a.run, read_json(a.file), revision)
-    if a.command == "authorize": return engine.authorize(a.run, a.scope, a.actor, read_text(a.evidence_file), revision, targets=a.targets, count=a.count, until=a.until, max_level=a.max_level, triggers=a.triggers)
+    if a.command == "authorize": return engine.authorize(a.run, a.scope, a.actor, read_text(a.evidence_file), revision, targets=a.targets, count=a.count, until=a.until, max_level=a.max_level, triggers=a.triggers, task=a.task)
     if a.command == "approve": return engine.approve(a.run, a.actor, read_text(a.evidence_file), revision, standing=a.standing)
     if a.command == "start": return engine.start(a.run, within_request=a.within_request, expected_revision=revision)
     if a.command == "task-prepare": return engine.prepare_task(a.run, a.task, revision)
     if a.command == "task-register": return engine.register_agent(a.run, a.task, a.actor, a.host, a.handle, revision, via_workflow=a.via_workflow)
     if a.command == "task-report": return engine.report_task(a.run, a.task, a.actor, read_json(a.file), revision)
     if a.command == "task-import": return engine.import_task_report(a.run, a.task, journal=a.journal, search_root=a.search_root, expected_revision=revision)
+    if a.command == "task-abandon": return engine.abandon_task(a.run, a.task, a.reason, revision)
     if a.command == "task-rework": return engine.rework(a.run, a.task, a.reason, revision, decision=a.decision, finding_keys=a.finding_keys)
     if a.command == "fix-register": return engine.register_fix(a.run, a.actor, a.host, a.handle, a.reason, revision)
     if a.command == "fix-report": return engine.report_fix(a.run, a.actor, read_json(a.file), revision)
     if a.command == "gate": return engine.execute_gate(a.run, task_id=a.task, case_id=a.case, gate_index=a.index, timeout=a.timeout, expected_revision=revision)
     if a.command == "gate-recover": return engine.gate_jobs.recover(a.run, a.job, read_text(a.evidence_file), expected_revision=revision)
     if a.command == "review": return engine.review(a.run, a.actor, a.verdict, read_text(a.evidence_file), task_id=a.task, expected_revision=revision, decision=a.decision, finding_keys=a.finding_keys)
-    if a.command == "review-token": return engine.review_token(a.run, task_id=a.task, lens=a.lens)
+    if a.command == "review-token": return engine.review_token(a.run, task_id=a.task, lens=a.lens, expected_revision=revision)
     if a.command == "review-import": return engine.import_review(a.run, lenses=a.lenses, task_id=a.task, journal=a.journal, search_root=a.search_root, decision=a.decision, finding_keys=a.finding_keys, expected_revision=revision)
     if a.command == "integrate": return engine.integrate(a.run, revision)
     if a.command == "ready": return engine.ready(a.run, revision)
