@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-from tests.test_run_engine import RunFixture, SCRIPTS, e, gate, plan
+from tests.test_run_engine import PASS_EVIDENCE, RunFixture, SCRIPTS, e, gate, plan
 import gate_jobs as jobs
 import publisher
 
@@ -186,7 +186,7 @@ class GateJobTests(RunFixture):
         (self.home / "first.started").unlink()
         with self.running():
             before = e.load(self.root)
-            self.assert_code("gate_job_active", e.review, self.root, "fixture-new-reviewer", "PASS", "Prior receipt cannot stand in for the active job.", task_id="value")
+            self.assert_code("gate_job_active", e.review, self.root, "fixture-new-reviewer", "PASS", PASS_EVIDENCE, task_id="value")
             self.assert_code("gate_job_active", e.integrate, self.root)
             self.assert_code("gate_job_active", e.revise, self.root, "Fixture semantic revision while its gate is active.")
             self.assertEqual(e.load(self.root), before)
@@ -200,7 +200,7 @@ class GateJobTests(RunFixture):
         e.integrate(self.root)
         (self.home / "integrated.release").write_text("release")
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Observed completed fixture integration gate.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         e.ready(self.root)
         (self.home / "integrated.release").unlink()
         (self.home / "integrated.started").unlink()
@@ -208,7 +208,7 @@ class GateJobTests(RunFixture):
         operations = [
             (e.ready, [], {}),
             (e.capture_verification, ["Fixture capture while testing."], {}),
-            (e.review, ["fixture-new-reviewer", "PASS", "Do not adopt the older receipt."], {}),
+            (e.review, ["fixture-new-reviewer", "PASS", PASS_EVIDENCE], {}),
             (e.register_fix, ["fixture-fix-writer", "unit-test", "fixture-fix-handle", "Fixture same-scope correction."], {}),
             (e.revise, ["Fixture semantic correction."], {}),
             (publisher.commit, ["Preserve the fixture value"], {}),

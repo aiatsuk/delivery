@@ -76,6 +76,8 @@ class RichIntegrationTests(run_fixtures.RunFixture):
             "This is not a real user's approval, a live agent result, or permission to publish externally.\n",
             encoding="utf-8",
         )
+        self.review_evidence = self.input_dir / "synthetic-review.md"
+        self.review_evidence.write_text(run_fixtures.PASS_EVIDENCE, encoding="utf-8")
 
     def cli(self, command, *arguments, expected_code=0):
         result = subprocess.run(
@@ -280,7 +282,7 @@ class RichIntegrationTests(run_fixtures.RunFixture):
         if complete_check:
             self.rich("complete", "--verdict", "PASS", check=True)
         self.rich("complete", "--verdict", "PASS")
-        self.cli("review", "--actor", "fixture-integration-reviewer", "--verdict", "PASS", "--evidence-file", self.authority)
+        self.cli("review", "--actor", "fixture-integration-reviewer", "--verdict", "PASS", "--evidence-file", self.review_evidence)
         return self.cli("ready")["result"] if mark_ready else e.load(self.root)
 
     def medium_ready(self):

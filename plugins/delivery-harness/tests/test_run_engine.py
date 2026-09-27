@@ -18,6 +18,12 @@ def git(path, *args):
     return subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=True).stdout.strip()
 
 
+# A PASS must carry concrete multi-line evidence; one shared synthetic record keeps fixtures honest.
+PASS_EVIDENCE = ("Synthetic fixture review of the exact current content; not a real reviewer's verdict.\n"
+                 "Acceptance: the owned file holds the planned value and no other path changed.\n"
+                 "Gates rerun: the planned fixture command passed on the current content fingerprint.\n")
+
+
 def gate(command=None, risk="safe"):
     return {"command": command or [sys.executable, "-B", "-c", "from pathlib import Path; assert Path('value.txt').read_text() == 'after\\n'"],
             "risk": risk, "oracle": "The fixture value is exactly the expected text.", "cleanup": "No resources or files are created."}
@@ -72,7 +78,7 @@ class RunFixture(unittest.TestCase):
 
     def verify(self, task="value"):
         self.assertTrue(e.execute_gate(self.root, task_id=task)["passed"])
-        e.review(self.root, "fixture-reviewer", "PASS", "Synthetic independent fixture review; exact scope and oracle checked.", task_id=task)
+        e.review(self.root, "fixture-reviewer", "PASS", PASS_EVIDENCE, task_id=task)
 
     def integrated(self):
         self.begin()
@@ -80,7 +86,7 @@ class RunFixture(unittest.TestCase):
         self.verify()
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Synthetic integrated review.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         return e.ready(self.root)
 
 
@@ -114,7 +120,7 @@ class PlanTests(unittest.TestCase):
 
     def test_requirement_coverage_required(self):
         value = plan()
-        value["requirements"].append({"id": "uncovered", "behavior": "Extra behavior.", "oracle": "Extra observation."})
+        value["requirements"].append({"id": "uncovered", "behavior": "Extra behavior.", "oracle": "The extra observation is recorded."})
         with self.assertRaisesRegex(e.RunError, "Every requirement"):
             e.validate_plan(value)
 
@@ -230,13 +236,13 @@ class RunTests(RunFixture):
         self.begin(); self.implement()
         e.execute_gate(self.root, task_id="value")
         with self.assertRaisesRegex(e.RunError, "reviewer"):
-            e.review(self.root, "fixture-writer-value", "PASS", "Synthetic self review.", task_id="value")
+            e.review(self.root, "fixture-writer-value", "PASS", PASS_EVIDENCE, task_id="value")
 
     def test_failed_gate_blocks_review(self):
         self.begin(); self.implement(changes={"value.txt": "wrong\n"})
         self.assertFalse(e.execute_gate(self.root, task_id="value")["passed"])
         with self.assertRaisesRegex(e.RunError, "planned gates"):
-            e.review(self.root, "fixture-reviewer", "PASS", "Invalid synthetic pass.", task_id="value")
+            e.review(self.root, "fixture-reviewer", "PASS", PASS_EVIDENCE, task_id="value")
 
     def test_test_that_mutates_source_cannot_pass(self):
         value = plan()
@@ -351,7 +357,7 @@ class RunTests(RunFixture):
         self.implement("second", {"value.txt": "final\n"}); self.verify("second")
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Synthetic dependency integration review.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         self.assertEqual(e.ready(self.root)["state"], "READY_TO_PUBLISH")
 
 

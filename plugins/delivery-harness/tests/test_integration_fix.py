@@ -5,7 +5,7 @@ import subprocess
 import sys
 import unittest
 
-from tests.test_run_engine import RunFixture, SCRIPTS, e, gate, git, plan
+from tests.test_run_engine import PASS_EVIDENCE, RunFixture, SCRIPTS, e, gate, git, plan
 
 
 class IntegrationFixTests(RunFixture):
@@ -17,7 +17,7 @@ class IntegrationFixTests(RunFixture):
         value["verification"][0].update(check)
         self.begin(value); self.implement(); self.verify(); e.integrate(self.root)
         e.execute_gate(self.root, case_id="value-check")
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Synthetic initial integration review.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         e.ready(self.root)
         return Path(e.load(self.root)["integration"]["path"])
 
@@ -43,8 +43,8 @@ class IntegrationFixTests(RunFixture):
         self.report_correction()
         e.execute_gate(self.root, case_id="value-check")
         with self.assertRaisesRegex(e.RunError, "reviewer"):
-            e.review(self.root, "fixture-fix-writer", "PASS", "Invalid synthetic self-review.")
-        e.review(self.root, "fixture-new-reviewer", "PASS", "Synthetic independent correction review.")
+            e.review(self.root, "fixture-fix-writer", "PASS", PASS_EVIDENCE)
+        e.review(self.root, "fixture-new-reviewer", "PASS", PASS_EVIDENCE)
         ready = e.ready(self.root)
         self.assertEqual(ready["state"], "READY_TO_PUBLISH")
         self.assertNotEqual(before, ready["validated"]["content"])
@@ -73,7 +73,7 @@ class IntegrationFixTests(RunFixture):
         git(path, "add", "--", "value.txt")
         self.report_correction()
         e.execute_gate(self.root, case_id="value-check")
-        e.review(self.root, "fixture-correction-reviewer", "PASS", "Synthetic independent correction review.")
+        e.review(self.root, "fixture-correction-reviewer", "PASS", PASS_EVIDENCE)
         before = e.ready(self.root)
 
         revised = e.revise(self.root, "The authorized fixture now requires the exact value, not a prefix.")
@@ -92,8 +92,8 @@ class IntegrationFixTests(RunFixture):
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
         with self.assertRaisesRegex(e.RunError, "reviewer"):
-            e.review(self.root, "fixture-fix-writer", "PASS", "A prior implementer must remain ineligible to review.")
-        e.review(self.root, "fixture-next-reviewer", "PASS", "Synthetic independent review of the new exact-value version.")
+            e.review(self.root, "fixture-fix-writer", "PASS", PASS_EVIDENCE)
+        e.review(self.root, "fixture-next-reviewer", "PASS", PASS_EVIDENCE)
         ready = e.ready(self.root)
         self.assertEqual(ready["spec_version"], 2)
         self.assertEqual(ready["state"], "READY_TO_PUBLISH")
@@ -152,7 +152,7 @@ class IntegrationFixTests(RunFixture):
         self.verify()
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-next-reviewer", "PASS", "Synthetic independent review of the exact-value plan.")
+        e.review(self.root, "fixture-next-reviewer", "PASS", PASS_EVIDENCE)
         current = e.ready(self.root)
         self.assertNotEqual(old_hash, current["plan_hash"])
         self.assertEqual([old_hash], [grant["plan_hash"] for grant in current["fix_budget_grants"]])

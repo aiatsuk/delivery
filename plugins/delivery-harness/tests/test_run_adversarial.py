@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 from unittest import mock
 
-from tests.test_run_engine import RunFixture, e, gate, git, plan
+from tests.test_run_engine import PASS_EVIDENCE, RunFixture, e, gate, git, plan
 
 
 def dependent_plan(*, shared_resource=False, shared_file=False):
@@ -42,7 +42,7 @@ class AdversarialRunTests(RunFixture):
         (integration / "unplanned.txt").write_text("Outside the approved file scope.\n")
         git(integration, "add", "--", "unplanned.txt")
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Synthetic review of the current files.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         with self.assertRaises(e.RunError, msg="An integrated review cannot widen the approved implementation scope."):
             e.ready(self.root)
 
@@ -105,14 +105,14 @@ class AdversarialRunTests(RunFixture):
         })
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         with self.assertRaises(e.RunError, msg="Independent review must exclude every actor who implemented this task, not only its latest actor."):
-            e.review(self.root, "fixture-writer-value", "PASS", "Synthetic prior implementer review.", task_id="value")
+            e.review(self.root, "fixture-writer-value", "PASS", PASS_EVIDENCE, task_id="value")
 
     def test_reviewer_whitespace_cannot_disguise_the_implementation_identity(self):
         self.begin()
         self.implement()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         with self.assertRaises(e.RunError) as refused:
-            e.review(self.root, " fixture-writer-value ", "PASS", "Synthetic whitespace alias of the writer.", task_id="value")
+            e.review(self.root, " fixture-writer-value ", "PASS", PASS_EVIDENCE, task_id="value")
         self.assertEqual(refused.exception.code, "reviewer_not_independent")
 
     def test_failed_integration_preserves_owned_worktree_for_a_safe_retry(self):
@@ -208,7 +208,7 @@ class AdversarialRunTests(RunFixture):
         self.verify("second")
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-final-reviewer", "PASS", "Synthetic current dependency attempt review.")
+        e.review(self.root, "fixture-final-reviewer", "PASS", PASS_EVIDENCE)
         self.assertEqual(e.ready(self.root)["state"], "READY_TO_PUBLISH")
 
     def test_dependency_preparation_resumes_after_a_recorded_patch_failure(self):

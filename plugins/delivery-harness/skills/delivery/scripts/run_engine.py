@@ -29,6 +29,13 @@ AXES = ("product", "ux", "technical", "integration", "risk", "qa", "rollout", "u
 LARGE = {"payments", "auth", "security", "privacy", "migration", "new_domain", "breaking_api", "data_loss", "multi_repo", "staged_rollout"}
 MEDIUM = {"backend_client", "sync", "complex_state", "optimistic_update", "important_edges", "runtime_qa", "feature_flag"}
 TERMINAL = {"COMPLETE", "CANCELLED"}
+LEVELS = {"small": 0, "medium": 1, "large": 2}
+DECISIONS = ("code-fix", "test-plan", "environment", "requirements", "human")
+PLACEHOLDER_EVENTS = {"agent_registered", "task_registered", "registered", "dispatch", "dispatched", "none", "null", "n/a", "unknown", "tbd", "todo"}
+STATUS_ONLY = {"exit 0", "exit code 0", "returns 0", "return code 0", "status 200", "http 200", "200 ok", "ok", "passes", "pass", "passed",
+               "tests pass", "all tests pass", "tests are green", "green", "works", "it works", "success", "succeeds", "no errors"}
+WORKFLOW_HOST = "claude-code-workflow"
+INSTANT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}(?::?[0-9]{2})?)?", re.IGNORECASE)
 
 
 class RunError(Exception):
@@ -58,6 +65,35 @@ def identifier(value: str) -> str:
 def text(value: Any, label: str) -> str:
     require(isinstance(value, str) and value.strip() and len(value) <= 100_000, "missing_text", f"{label} must contain concrete text.")
     return value.strip()
+
+
+def _instant(match: re.Match) -> tuple[dt.datetime, int]:
+    """Return an aware instant and its fractional-second precision; no zone means UTC."""
+    year, month, day, hour, minute, second, fraction, zone = match.groups()
+    zone, fraction = (zone or "Z").upper(), fraction or ""
+    sign = -1 if zone.startswith("-") else 1
+    offset = dt.timedelta(0) if zone == "Z" else sign * dt.timedelta(hours=int(zone[1:3]), minutes=int(zone[3:].lstrip(":") or 0))
+    try:
+        value = dt.datetime(int(year), int(month), int(day), int(hour), int(minute), int(second),
+                            int(fraction[:6].ljust(6, "0")), tzinfo=dt.timezone(offset))
+    except ValueError as exc:
+        raise RunError("invalid_timestamp", f"Not a valid ISO-8601 instant: {match.group(0)}") from exc
+    return value, min(len(fraction), 6)
+
+
+def parse_instant(value: Any, label: str) -> dt.datetime:
+    match = INSTANT.fullmatch(value.strip()) if isinstance(value, str) else None
+    require(match and match.group(8), "invalid_timestamp", f"{label} must be an ISO-8601 date and time with an offset or Z.")
+    return _instant(match)[0]
+
+
+def oracle(value: Any, label: str) -> str:
+    value = text(value, label)
+    words = value.split()
+    status = " ".join(words).lower()
+    status = status[:-1].rstrip() if status.endswith(".") else status
+    require(len(words) >= 4 and status not in STATUS_ONLY, "weak_oracle", f"{label} must name an observable result, not only a status such as exit 0 or passes.")
+    return value
 
 
 def safe_path(value: str) -> str:
@@ -196,7 +232,7 @@ def validate_plan(plan: dict) -> dict:
         require(rid not in ids, "duplicate_id", "Requirement IDs must be unique.")
         ids.add(rid)
         text(req.get("behavior"), "Required behavior")
-        text(req.get("oracle"), "Requirement oracle")
+        oracle(req.get("oracle"), "Requirement oracle")
     decisions = plan.get("decisions", [])
     require(isinstance(decisions, list), "invalid_plan", "Decisions must be a list.")
     require(all(d.get("status") in {"accepted", "not-material"} and d.get("reason") for d in decisions), "open_decisions", "Resolve material decisions before implementation.")
@@ -218,7 +254,7 @@ def validate_plan(plan: dict) -> dict:
             require(isinstance(gate, dict), "invalid_gate", "Task gates include command, risk, oracle and cleanup, like integrated cases.")
             command(gate.get("command"))
             require(gate.get("risk") in {"safe", "external", "destructive"}, "invalid_risk", "Classify each task gate's side effects explicitly.")
-            text(gate.get("oracle"), "Task gate oracle")
+            oracle(gate.get("oracle"), "Task gate oracle")
             text(gate.get("cleanup"), "Task gate cleanup")
         require(isinstance(item.get("resources", []), list) and all(isinstance(r, str) and r.strip() for r in item.get("resources", [])), "invalid_resource", "Exclusive resources are named strings.")
         tasks[tid] = {**item, "depends_on": item.get("depends_on", []), "resources": sorted({r.strip() for r in item.get("resources", [])})}
@@ -238,7 +274,7 @@ def validate_plan(plan: dict) -> dict:
         case_ids.add(cid)
         command(case.get("command"))
         require(case.get("risk") in {"safe", "external", "destructive"}, "invalid_risk", "Classify test side effects explicitly.")
-        text(case.get("oracle"), "Observable verification oracle")
+        oracle(case.get("oracle"), "Observable verification oracle")
         text(case.get("cleanup"), "Verification cleanup")
         require(isinstance(case.get("resources", []), list) and all(isinstance(r, str) and r.strip() for r in case.get("resources", [])), "invalid_resource", "Integrated resources are named strings.")
         require(set(case.get("requirements", [])) and set(case["requirements"]) <= ids, "coverage_gap", "Cases must trace to requirements.")
@@ -282,8 +318,31 @@ def _test_targets(run: dict, scope: str) -> dict:
     return values
 
 
-def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None) -> dict:
-    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+def _authorize_standing(root, actor: str, evidence: str, expected_revision=None, *, targets=None, until=None, max_level=None, triggers=None) -> dict:
+    """Record a bounded standing approval; it survives plan changes but never widens beyond its level and triggers."""
+    require(targets is None, "invalid_authorization_target", "Gate targets apply only to test authority.")
+    require(max_level in LEVELS, "invalid_level", "A standing approval names max_level small, medium or large.")
+    triggers = [] if triggers is None else triggers
+    require(isinstance(triggers, list) and all(isinstance(t, str) and t in LARGE | MEDIUM for t in triggers), "invalid_trigger", "Unknown risk trigger.")
+    ends = parse_instant(until, "Standing approval until")
+    with transaction(root, "standing_approval_recorded", expected_revision) as run:
+        current = parse_instant(now(), "Current time")
+        require(ends > current, "invalid_standing_approval", "A standing approval must end in the future; to end a grant, record one that ends sooner.")
+        require(ends <= current + dt.timedelta(days=30), "invalid_standing_approval", "A standing approval can last at most 30 days.")
+        grant = {**attestation(actor, evidence), "until": ends.astimezone(dt.timezone.utc).isoformat(), "max_level": max_level, "triggers": sorted(set(triggers))}
+        grant["id"] = digest(grant)
+        if run.get("standing_approval"):
+            run.setdefault("standing_history", []).append(run["standing_approval"])
+        run["standing_approval"] = grant
+    return load(root)
+
+
+def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None, until=None, max_level=None, triggers=None) -> dict:
+    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "standing-approval"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+    if scope == "standing-approval":
+        require(count is None, "invalid_authorization_count", "Only fix-budget authority takes a count.")
+        return _authorize_standing(root, actor, evidence, expected_revision, targets=targets, until=until, max_level=max_level, triggers=triggers)
+    require(until is None and max_level is None and triggers is None, "invalid_standing_approval", "until, max_level and triggers apply only to a standing approval.")
     if scope == "fix-budget":
         require(type(count) is int and 1 <= count <= 3, "invalid_fix_budget", "A fix-budget extension needs an explicit integer count from 1 to 3.")
     else:
@@ -325,14 +384,33 @@ def need_authority(run: dict, scope: str, *, target: str | None = None) -> None:
         require(isinstance(target, str) and target in available and grant.get("targets", {}).get(target) == available[target], "authorization_required", f"Obtain explicit, current {scope} authority for gate {target or '<unspecified>'} first.")
 
 
-def approve(root, actor: str, evidence: str, expected_revision=None) -> dict:
+def _standing_grant(run: dict) -> dict:
+    grant = run.get("standing_approval")
+    require(grant, "standing_approval_insufficient", "No standing approval is recorded; obtain an individual approval.")
+    require(parse_instant(now(), "Current time") < parse_instant(grant["until"], "Standing approval until"), "standing_approval_insufficient", f"The standing approval expired at {grant['until']}; obtain an individual approval.")
+    classification = run["plan"]["classification"]
+    require(LEVELS[classification["level"]] <= LEVELS[grant["max_level"]], "standing_approval_insufficient", f"The plan level {classification['level']} exceeds the standing approval maximum {grant['max_level']}; obtain an individual approval.")
+    extra = sorted(set(classification["triggers"]) - set(grant["triggers"]))
+    require(not extra, "standing_approval_insufficient", "The plan's risk triggers exceed the standing approval: " + ", ".join(extra) + "; obtain an individual approval.")
+    return grant
+
+
+def approve(root, actor: str, evidence: str, expected_revision=None, *, standing=False) -> dict:
     with transaction(root, "semantic_baseline_approved", expected_revision) as run:
         require(run["state"] == "READY_FOR_APPROVAL", "approval_state", "Review the current plan before approving it.")
         assert_plan(run)
+        grant = _standing_grant(run) if standing else None
+        record = attestation(actor, evidence)
+        approver = f"standing:{grant['actor']}" if grant else actor
         if run["plan"]["classification"]["level"] != "small":
             scope = sorted({p for task in run["plan"]["tasks"] for p in task["paths"]})
-            spec_command(root, ["approve", "--actor", actor, "--note", evidence, *[arg for path in scope for arg in ("--planned", path)]])
-        run["approval"] = {**attestation(actor, evidence), "plan_hash": run["plan_hash"], "version": run["spec_version"]}
+            spec_command(root, ["approve", "--actor", approver, "--note", evidence, *[arg for path in scope for arg in ("--planned", path)]])
+        if grant:
+            record = {"actor": approver, "recorded_by": record["actor"], "evidence": record["evidence"], "kind": "standing", "grant_id": grant["id"], "at": record["at"]}
+        else:
+            record["kind"] = "individual"
+        run["approval"] = {**record, "plan_hash": run["plan_hash"], "version": run["spec_version"]}
+        run.setdefault("approval_history", []).append(run["approval"])
         run["state"] = "APPROVED"
     return load(root)
 
@@ -619,22 +697,39 @@ def _exclusive_dispatch_available(run: dict, task_id: str) -> None:
             require(job["task"] != task_id and not resources.intersection(job["resources"]), "resource_in_use", "A recorded gate job still holds this task worktree or an exclusive resource; collect its actual result or explicitly recover its ended processes.")
 
 
-def register_agent(root, task_id: str, actor: str, host: str, handle: str, expected_revision=None) -> dict:
+def _pre_dispatch_content(owner: dict, snap: dict) -> None:
+    """Nothing may write the task worktree between preparation or a failing result and the next dispatch."""
+    if owner["status"] == "PREPARED":
+        require(not snap["files"], "pre_dispatch_changes", "The task worktree already differs from its prepared base before any dispatch; preserve it and find out who wrote it.")
+        return
+    history = owner.get("rework_history") or []
+    failing = (history[-1].get("report") or {}).get("snapshot") if history else None
+    if failing:
+        require(snap["content"] == failing["content"], "pre_dispatch_changes", "The task worktree changed after the failing result that started this rework round and before the new dispatch; preserve it and find out who wrote it.")
+
+
+def register_agent(root, task_id: str, actor: str | None = None, host: str | None = None, handle: str | None = None, expected_revision=None, *, via_workflow=False) -> dict:
     with transaction(root, "agent_registered", expected_revision) as run:
         _implementation_state(run)
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] in {"PREPARED", "REWORK"}, "task_state", "Task is not ready for dispatch.")
         owned_worktree_record(run, owner, task_id=task_id)
-        snapshot(run, task_id)
+        _pre_dispatch_content(owner, snapshot(run, task_id))
         _require_current_dependencies(run, task_id)
         _exclusive_dispatch_available(run, task_id)
+        sequence = len(owner.get("dispatches", [])) + 1
+        if via_workflow:
+            require(actor is None and host is None and handle is None, "workflow_identity_supplied", "A workflow dispatch takes its agent identity from the host journal; do not supply actor, host or handle.")
+            actor, host, handle = "workflow-pending", WORKFLOW_HOST, f"workflow-pending:{task_id}:a{owner['attempt']}:d{sequence}"
         actor, host, handle = text(actor, "Agent identity"), text(host, "Host"), text(handle, "Successful spawn handle")
         require(not any(other_id != task_id and other["status"] == "DISPATCHED" and other.get("agent", {}).get("host") == host and other.get("agent", {}).get("handle") == handle for other_id, other in run["tasks"].items()), "handle_in_use", "A live host handle cannot be assigned to two task dispatches.")
         dispatch_id = digest({"run": run["root"], "plan": run["plan_hash"], "task": task_id,
-                              "attempt": owner["attempt"], "sequence": len(owner.get("dispatches", [])) + 1,
+                              "attempt": owner["attempt"], "sequence": sequence,
                               "revision": run["revision"] + 1, "actor": actor, "host": host, "handle": handle})
         agent = {"actor": actor, "host": host, "handle": handle, "dispatch_id": dispatch_id,
                  "registered_at": now(), "liveness": "must-query-host"}
+        if via_workflow:
+            agent.update(via_workflow=True, liveness="workflow-journal")
         if owner.get("agent") and not owner.get("dispatches"):
             owner.setdefault("dispatches", []).append(copy.deepcopy(owner["agent"]))
         owner.setdefault("dispatches", []).append(agent)
@@ -675,25 +770,77 @@ def validate_report(result: dict) -> None:
             text(limitation, "Limitation")
 
 
+def check_source_event(source_event: str, dispatch: dict) -> None:
+    """Refuse registration placeholders and results observed before their dispatch existed."""
+    value = source_event.strip().lower()
+    echoes = {str(dispatch.get(key) or "").strip().lower() for key in ("dispatch_id", "handle")} - {""}
+    require(value not in PLACEHOLDER_EVENTS and value not in echoes, "placeholder_source_event", "source_event must reference the actual host result, not a registration placeholder, the dispatch ID or the handle.")
+    registered = parse_instant(dispatch.get("registered_at"), "Dispatch registration time")
+    for match in INSTANT.finditer(source_event):
+        observed, digits = _instant(match)
+        floor = registered.replace(microsecond=registered.microsecond - registered.microsecond % 10 ** (6 - digits))
+        require(observed >= floor, "source_event_predates_dispatch", f"The result observed at {match.group(0)} predates its dispatch registration at {dispatch['registered_at']}; collect the current dispatch's actual result.")
+
+
+def _accept_task_report(run: dict, task_id: str, result: dict) -> None:
+    """Shared acceptance for a direct report and a journal import of the current dispatch."""
+    owner = run["tasks"][task_id]
+    validate_report(result)
+    check_source_event(result["source_event"], owner["agent"])
+    _require_current_dependencies(run, task_id)
+    owned_worktree_record(run, owner, task_id=task_id)
+    event = digest({"host": owner["agent"]["host"], "handle": owner["agent"]["handle"], "source_event": result["source_event"]})
+    require(event not in run.get("accepted_source_events", {}), "source_event_reused", "This host result event was already accepted; collect the current dispatch's actual return.")
+    snap = snapshot(run, task_id)
+    paths = task_plan(run, task_id)["paths"]
+    require(snap["files"] and all(covered(p, paths) for p in snap["files"]), "scope_violation", "Task changes must be nonempty and confined to approved paths.")
+    report = {**result, "actor": owner["agent"]["actor"], "host": owner["agent"]["host"], "handle": owner["agent"]["handle"], "snapshot": snap, "at": now()}
+    owner.update(status="REPORTED", report=report)
+    owner.setdefault("reports", []).append(report)
+    run.setdefault("accepted_source_events", {})[event] = {"task": task_id, "dispatch_id": owner["agent"]["dispatch_id"], "source_event": result["source_event"]}
+
+
 def report_task(root, task_id: str, actor: str, result: dict, expected_revision=None) -> dict:
     with transaction(root, "task_report_received", expected_revision) as run:
         _implementation_state(run)
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] == "DISPATCHED" and owner["agent"]["actor"] == actor, "agent_mismatch", "Only the registered task actor can supply its report.")
+        require(not owner["agent"].get("via_workflow"), "workflow_report_required", "A workflow dispatch reports only through task-import from the host-written journal.")
         require(isinstance(result, dict), "invalid_report", "A task report must be a structured result.")
         require(result.get("dispatch_id") == owner["agent"]["dispatch_id"], "dispatch_mismatch", "The report must name the current registered dispatch_id; a prior handle's result cannot complete replacement work.")
-        validate_report(result)
-        _require_current_dependencies(run, task_id)
-        owned_worktree_record(run, owner, task_id=task_id)
-        event = digest({"host": owner["agent"]["host"], "handle": owner["agent"]["handle"], "source_event": result["source_event"]})
-        require(event not in run.get("accepted_source_events", {}), "source_event_reused", "This host result event was already accepted; collect the current dispatch's actual return.")
-        snap = snapshot(run, task_id)
-        paths = task_plan(run, task_id)["paths"]
-        require(snap["files"] and all(covered(p, paths) for p in snap["files"]), "scope_violation", "Task changes must be nonempty and confined to approved paths.")
-        report = {**result, "actor": actor, "host": owner["agent"]["host"], "handle": owner["agent"]["handle"], "snapshot": snap, "at": now()}
-        owner.update(status="REPORTED", report=report)
-        owner.setdefault("reports", []).append(report)
-        run.setdefault("accepted_source_events", {})[event] = {"task": task_id, "dispatch_id": owner["agent"]["dispatch_id"], "source_event": result["source_event"]}
+        _accept_task_report(run, task_id, result)
+    return load(root)
+
+
+def _journal_evidence(found: dict) -> dict:
+    return {"path": found["journal"], **{key: found[key] for key in ("run_id", "agent_id", "key", "label", "line_sha256", "transcript_sha256")}}
+
+
+def import_task_report(root, task_id: str, *, journal=None, search_root=None, expected_revision=None) -> dict:
+    """Accept a workflow dispatch's result from the host-written journal, which supplies the agent identity."""
+    import workflow_journal
+    owner = load(root)["tasks"].get(task_id)
+    agent = (owner or {}).get("agent") or {}
+    require(owner and owner["status"] == "DISPATCHED" and agent.get("via_workflow"), "not_workflow_dispatch", "Only a dispatched task registered with --via-workflow imports its result from a workflow journal.")
+    dispatch_id = agent["dispatch_id"]
+    matches = workflow_journal.find_results(lambda result: result.get("dispatch_id") == dispatch_id, journal=journal, search_root=search_root)
+    require(matches, "journal_result_missing", "No workflow journal result names this dispatch_id; wait for the actual return or query the host.")
+    require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results name this dispatch_id; select the exact journal after inspecting them.")
+    found = matches[0]
+    with transaction(root, "task_report_imported", expected_revision) as run:
+        _implementation_state(run)
+        owner = run["tasks"].get(task_id)
+        current = (owner or {}).get("agent") or {}
+        require(owner and owner["status"] == "DISPATCHED" and current.get("via_workflow") and current.get("dispatch_id") == dispatch_id, "not_workflow_dispatch", "The workflow dispatch changed while its journal was searched; search again.")
+        report = {**found["result"], "source_event": f"workflow-journal:{found['run_id']}/{found['agent_id']}#{found['line_sha256'][:16]}"}
+        validate_report(report)
+        identity = {"actor": f"workflow-agent:{found['run_id']}/{found['agent_id']}", "handle": f"{found['run_id']}/{found['agent_id']}",
+                    "journal": _journal_evidence(found), "liveness": "returned"}
+        current.update(copy.deepcopy(identity))
+        if owner.get("dispatches"):
+            owner["dispatches"][-1].update(copy.deepcopy(identity))
+        run.setdefault("writer_history", []).append({**copy.deepcopy(current), "task": task_id, "attempt": owner["attempt"]})
+        _accept_task_report(run, task_id, report)
     return load(root)
 
 
@@ -865,40 +1012,132 @@ def assert_gates_idle(run: dict, *, task_id: str | None = None) -> None:
                     "gate_job_active", "Wait for the active gate's actual result or recover its confirmed-ended job before changing its lifecycle or worktree.")
 
 
-def review(root, actor: str, verdict: str, evidence: str, *, task_id: str | None = None, expected_revision=None) -> dict:
+def triage(decision: Any, finding_keys: Any) -> tuple[str, list[str]]:
+    decision = "code-fix" if decision is None else decision
+    require(decision in DECISIONS, "invalid_decision", "A finding decision is code-fix, test-plan, environment, requirements or human.")
+    keys = [] if finding_keys is None else finding_keys
+    require(isinstance(keys, (list, tuple)) and all(isinstance(key, str) and key.strip() and len(key) <= 1000 for key in keys), "invalid_finding_key", "Finding keys are short non-empty strings such as path|kind.")
+    return decision, sorted({key.strip().lower() for key in keys})
+
+
+def review_evidence(verdict: str, evidence: Any) -> str:
+    value = text(evidence, "Original authorization or host-result reference")
+    if verdict == "PASS":
+        lines = [line for line in value.splitlines() if line.strip()]
+        require(len(value) >= 160 and len(lines) >= 2, "review_evidence_insufficient", "A PASS needs concrete evidence per acceptance item and the gates the reviewer reran, not a one-line verdict.")
+    return value
+
+
+def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, task_id: str | None, decision: str, finding_keys: list[str], extra: dict | None = None) -> None:
+    """The single recording path for direct and journal-imported reviews."""
+    assert_plan(run)
+    assert_gates_idle(run, task_id=task_id)
+    if task_id is not None:
+        _implementation_state(run)
+        require(task_id in run["tasks"], "missing_worktree", "Prepare the owned task worktree first.")
+        _require_current_dependencies(run, task_id)
+    else:
+        require(run["state"] in {"VERIFYING", "READY_TO_PUBLISH", "PR_OPEN"}, "review_state", "Integrated review requires returned implementation and an active verification or PR state.")
+        fix = run.get("integration_fix")
+        if fix:
+            require(fix.get("status") != "DISPATCHED", "fix_report_required", "Collect the registered integration fix's actual return before review.")
+            require(fix.get("report") and evidence_current(fix["report"], snapshot(run)), "stale_fix_report", "The integration fix report must match the current integration content.")
+    require(gates_current(run, task_id), "gate_required", "Run all planned gates on the current content before review.")
+    require(actor not in _writer_actors(run), "reviewer_not_independent", "The reviewer must not be a current or previous implementation actor.")
+    receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": snapshot(run, task_id), **(extra or {})}
+    if verdict == "FAIL":
+        receipt.update(decision=decision, finding_keys=finding_keys)
+    run["reviews"].append(receipt)
+    if task_id:
+        owner = run["tasks"][task_id]
+        require(owner["status"] in {"REPORTED", "VERIFIED"}, "task_state", "Review requires a returned task report.")
+        if verdict == "PASS":
+            report = owner["report"]
+            require(evidence_current(report, snapshot(run, task_id)), "stale_report", "Collect an updated implementer report after changes.")
+            patches = Path(root) / "patches"
+            patches.mkdir(exist_ok=True)
+            snap = snapshot(run, task_id)
+            require(all(covered(p, task_plan(run, task_id)["paths"]) for p in snap["files"]), "scope_violation", "The reviewed changes left the task's owned scope.")
+            patch = git_ops.export_patch(owner["path"], str(patches / f"v{run['spec_version']}-{task_id}-r{run['revision']}.patch"), snap["files"])
+            owner.update(status="VERIFIED", patch=patch)
+        else:
+            _mark_rework(run, task_id, evidence, decision, finding_keys)
+
+
+def review(root, actor: str, verdict: str, evidence: str, *, task_id: str | None = None, expected_revision=None, decision="code-fix", finding_keys=None) -> dict:
     require(verdict in {"PASS", "FAIL"}, "invalid_verdict", "Review verdict is PASS or FAIL.")
     actor = text(actor, "Reviewer identity")
+    decision, finding_keys = triage(decision, finding_keys)
+    review_evidence(verdict, evidence)
     with transaction(root, "independent_review_recorded", expected_revision) as run:
-        assert_plan(run)
-        assert_gates_idle(run, task_id=task_id)
-        if task_id is not None:
-            _implementation_state(run)
-            require(task_id in run["tasks"], "missing_worktree", "Prepare the owned task worktree first.")
-            _require_current_dependencies(run, task_id)
-        else:
-            require(run["state"] in {"VERIFYING", "READY_TO_PUBLISH", "PR_OPEN"}, "review_state", "Integrated review requires returned implementation and an active verification or PR state.")
-            fix = run.get("integration_fix")
-            if fix:
-                require(fix.get("status") != "DISPATCHED", "fix_report_required", "Collect the registered integration fix's actual return before review.")
-                require(fix.get("report") and evidence_current(fix["report"], snapshot(run)), "stale_fix_report", "The integration fix report must match the current integration content.")
-        require(gates_current(run, task_id), "gate_required", "Run all planned gates on the current content before review.")
-        require(actor not in _writer_actors(run), "reviewer_not_independent", "The reviewer must not be a current or previous implementation actor.")
-        receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": snapshot(run, task_id)}
-        run["reviews"].append(receipt)
-        if task_id:
-            owner = run["tasks"][task_id]
-            require(owner["status"] in {"REPORTED", "VERIFIED"}, "task_state", "Review requires a returned task report.")
-            if verdict == "PASS":
-                report = owner["report"]
-                require(evidence_current(report, snapshot(run, task_id)), "stale_report", "Collect an updated implementer report after changes.")
-                patches = Path(root) / "patches"
-                patches.mkdir(exist_ok=True)
-                snap = snapshot(run, task_id)
-                require(all(covered(p, task_plan(run, task_id)["paths"]) for p in snap["files"]), "scope_violation", "The reviewed changes left the task's owned scope.")
-                patch = git_ops.export_patch(owner["path"], str(patches / f"v{run['spec_version']}-{task_id}-r{run['revision']}.patch"), snap["files"])
-                owner.update(status="VERIFIED", patch=patch)
-            else:
-                _mark_rework(run, task_id, evidence)
+        _record_review(run, root, actor, verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys)
+    return load(root)
+
+
+def _review_token(run: dict, task_id: str | None, lens: str) -> dict:
+    lens = identifier(lens)
+    require(run.get("plan"), "missing_plan", "Record a plan before requesting review.")
+    if task_id is not None:
+        task_plan(run, task_id)
+    snap = snapshot(run, task_id)
+    token = "review-" + digest({"run": run["root"], "task": task_id, "lens": lens, "content": snap["content"], "base_sha": snap["base_sha"],
+                                "plan_hash": run["plan_hash"], "spec_version": run["spec_version"]})[:32]
+    return {"token": token, "task": task_id, "lens": lens, "content": snap["content"]}
+
+
+def review_token(root, *, task_id: str | None = None, lens: str = "default") -> dict:
+    """Read-only: the token a reviewer returns so its journal result binds this exact content and lens."""
+    return _review_token(load(root), task_id, lens)
+
+
+def _lens_result(lens: str, found: dict) -> dict:
+    result = found["result"]
+    require(result.get("verdict") in {"PASS", "FAIL"}, "invalid_verdict", f"Review lens {lens} must return verdict PASS or FAIL.")
+    evidence = result.get("evidence")
+    require((isinstance(evidence, str) and evidence.strip()) or (isinstance(evidence, dict) and evidence), "missing_text", f"Review lens {lens} must return concrete evidence.")
+    rendered = evidence if isinstance(evidence, str) else json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=False)
+    review_evidence(result["verdict"], rendered)
+    defects = result.get("defects")
+    require(isinstance(defects, list) and all(isinstance(d, dict) and all(isinstance(d[k], str) for k in ("file", "kind") if k in d) for d in defects),
+            "invalid_defects", f"Review lens {lens} must return defects as a list of objects whose file and kind are strings.")
+    return {"lens": lens, "actor": f"workflow-agent:{found['run_id']}/{found['agent_id']}", "verdict": result["verdict"],
+            "evidence": evidence, "defects": defects, "journal": _journal_evidence(found)}
+
+
+def import_review(root, *, lenses, task_id: str | None = None, journal=None, search_root=None, decision=None, finding_keys=None, expected_revision=None) -> dict:
+    """Record one review from host-journal results, one independent reviewer per lens, bound to the current content."""
+    import workflow_journal
+    require(isinstance(lenses, (list, tuple)) and lenses and len(set(lenses)) == len(lenses), "invalid_lens", "Name one or more distinct review lenses.")
+    decision, finding_keys = triage(decision, finding_keys)
+    run = load(root)
+    tokens = {_review_token(run, task_id, lens)["token"]: lens for lens in lenses}
+    found = {lens: [] for lens in lenses}
+    for match in workflow_journal.find_results(lambda result: result.get("review_token") in tokens, journal=journal, search_root=search_root):
+        found[tokens[match["result"]["review_token"]]].append(match)
+    for lens, matches in found.items():
+        require(matches, "journal_result_missing", f"No workflow journal result carries the current review token for lens {lens}; request review of the current content.")
+        require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results carry the review token for lens {lens}; select the exact journal.")
+    results = [_lens_result(lens, found[lens][0]) for lens in lenses]
+    verdict = "FAIL" if any(item["verdict"] == "FAIL" for item in results) else "PASS"
+    keys = {f"{str(d.get('file', '')).strip().lower()}|{str(d.get('kind', '')).strip().lower()}" for item in results if item["verdict"] == "FAIL" for d in item["defects"]}
+    finding_keys = sorted((keys - {"|"}) | set(finding_keys))
+    evidence = json.dumps({"lenses": results}, indent=2, sort_keys=True, ensure_ascii=False)
+    review_evidence(verdict, evidence)
+    actors = [item["actor"] for item in results]
+    with transaction(root, "independent_review_imported", expected_revision) as run:
+        require(all(_review_token(run, task_id, lens)["token"] == token for token, lens in tokens.items()), "stale_review_token", "The reviewed content changed while the journal was searched; request review of the current content.")
+        writers = _writer_actors(run)
+        writer_agents = {actor.split("/", 1)[1] for actor in writers if actor.startswith("workflow-agent:") and "/" in actor}
+        agents = [item["journal"]["agent_id"] for item in results]
+        require(len(set(agents)) == len(agents) and len(set(actors)) == len(actors), "reviewer_not_independent", "Each review lens needs a distinct reviewer agent.")
+        require(not writers.intersection(actors) and not writer_agents.intersection(agents), "reviewer_not_independent", "A reviewer must not be a current or previous implementation actor.")
+        used = run.setdefault("accepted_review_events", {})
+        lines = [item["journal"]["line_sha256"] for item in results]
+        require(not used.keys() & set(lines), "review_event_reused", "This workflow review result was already recorded; request a fresh review.")
+        _record_review(run, root, "+".join(actors), verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys,
+                       extra={"reviewers": actors, "lenses": list(lenses), "source": "workflow-journal"})
+        for item in results:
+            used[item["journal"]["line_sha256"]] = {"task": task_id, "lens": item["lens"], "actor": item["actor"], "revision": run["revision"] + 1}
     return load(root)
 
 
@@ -1067,6 +1306,7 @@ def report_fix(root, actor: str, result: dict, expected_revision=None) -> dict:
         owner = run.get("integration_fix") or {}
         require(owner.get("status") == "DISPATCHED" and owner.get("actor") == actor and result.get("dispatch_id") == owner.get("dispatch_id"), "dispatch_mismatch", "The actual integration-fix result must match this dispatch.")
         validate_report(result)
+        check_source_event(result["source_event"], owner)
         snap = snapshot(run)
         scopes = [p for task in run["plan"]["tasks"] for p in task["paths"]]
         require(snap["files"] and all(covered(p, scopes) for p in snap["files"]), "scope_violation", "A same-scope PR correction cannot expand the approved surface.")
@@ -1111,7 +1351,13 @@ def revise(root, reason: str, expected_revision=None) -> dict:
     return load(root)
 
 
-def _mark_rework(run: dict, task_id: str, reason: str) -> None:
+def _block_task(run: dict, code: str, reason: str) -> None:
+    run["blocker"] = {"reason": reason, "code": code, "from": run["state"], "at": now()}
+    run["state"] = "BLOCKED"
+
+
+def _mark_rework(run: dict, task_id: str, reason: str, decision: str = "code-fix", finding_keys=()) -> None:
+    decision, finding_keys = triage(decision, list(finding_keys))
     owner = run["tasks"].get(task_id)
     require(owner and owner["status"] in {"REPORTED", "VERIFIED"}, "task_state", "Only returned work can enter rework.")
     reason = text(reason, "Concrete failure or review finding")
@@ -1125,18 +1371,32 @@ def _mark_rework(run: dict, task_id: str, reason: str) -> None:
     for key in descendants:
         run["tasks"][key]["status"] = "INVALIDATED"
         run["tasks"][key]["invalidated_by"] = {"task": task_id, "reason": reason, "at": now()}
-    owner.setdefault("rework_history", []).append({"reason": reason, "report": owner.get("report"), "patch": owner.get("patch"), "at": now()})
+    history = owner.setdefault("rework_history", [])
+    previous = next((entry for entry in reversed(history) if entry.get("decision", "code-fix") == "code-fix"), None)
+    history.append({"reason": reason, "report": owner.get("report"), "patch": owner.get("patch"), "at": now(), "decision": decision, "finding_keys": finding_keys})
     owner.update(status="REWORK", patch=None, report=None)
-    owner["rework_rounds"] = owner.get("rework_rounds", 0) + 1
-    if owner["rework_rounds"] > 2:
-        run["blocker"] = {"reason": "Two rework rounds exhausted; revise or obtain explicit escalation.", "from": run["state"], "at": now()}
-        run["state"] = "BLOCKED"
+    if decision == "code-fix":
+        owner["rework_rounds"] = owner.get("rework_rounds", 0) + 1
+        repeated = sorted(set(finding_keys) & set((previous or {}).get("finding_keys") or []))
+        if owner["rework_rounds"] > 2:
+            _block_task(run, "rework_budget", "Two rework rounds exhausted; revise or obtain explicit escalation.")
+        elif repeated:
+            _block_task(run, "non_converging", f"The same finding survived a rework round ({', '.join(repeated)}); revise the plan or escalate explicitly.")
+    elif decision in {"test-plan", "environment"}:
+        owner["support_rounds"] = owner.get("support_rounds", 0) + 1
+        if owner["support_rounds"] > 2:
+            _block_task(run, "support_budget", "Two test-plan or environment rounds are exhausted; fix the plan or the environment explicitly.")
+    elif decision == "requirements":
+        _block_task(run, "requirements_finding", f"A requirements finding needs revise and renewed approval, not implementer rework: {reason}")
+    else:
+        _block_task(run, "human_decision", f"A human decision is required: {reason}")
 
 
-def rework(root, task_id: str, reason: str, expected_revision=None) -> dict:
+def rework(root, task_id: str, reason: str, expected_revision=None, *, decision="code-fix", finding_keys=None) -> dict:
+    decision, finding_keys = triage(decision, finding_keys)
     with transaction(root, "task_rework_requested", expected_revision) as run:
         _implementation_state(run)
-        _mark_rework(run, task_id, reason)
+        _mark_rework(run, task_id, reason, decision, finding_keys)
     return load(root)
 
 
@@ -1144,7 +1404,13 @@ def status(root) -> dict:
     run = load(root)
     result = {k: run[k] for k in ("id", "root", "primary", "revision", "state", "spec_version", "plan_hash", "blocker", "pr")}
     result["classification"] = run["plan"]["classification"] if run.get("plan") else None
-    result["tasks"] = {tid: {"status": t["status"], "path": t["path"], "agent": t.get("agent")} for tid, t in run["tasks"].items()}
+    result["tasks"] = {tid: {"status": t["status"], "path": t["path"], "agent": t.get("agent"), "via_workflow": bool((t.get("agent") or {}).get("via_workflow")),
+                             "rework_rounds": t.get("rework_rounds", 0), "support_rounds": t.get("support_rounds", 0)} for tid, t in run["tasks"].items()}
+    result["blocker_code"] = (run.get("blocker") or {}).get("code")
+    grant = run.get("standing_approval")
+    result["standing_approval"] = {key: grant[key] for key in ("actor", "until", "max_level", "triggers")} if grant else None
+    result["approvals"] = [{"version": item.get("version"), "actor": item.get("actor"), "kind": item.get("kind", "individual")} for item in run.get("approval_history", [])]
+    result["approval"] = {"version": run["approval"].get("version"), "actor": run["approval"].get("actor"), "kind": run["approval"].get("kind", "individual")} if run.get("approval") else None
     owner = run.get("integration")
     result["integration"] = {key: owner.get(key) for key in ("path", "branch", "base_sha", "status")} if owner else None
     result["spec_root"] = run["spec_root"]
