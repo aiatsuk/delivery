@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import copy
+import errno
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,21 @@ while not Path(sys.argv[2]).exists() and time.monotonic() < deadline:
     time.sleep(.02)
 assert Path(sys.argv[2]).exists(), 'Fixture release timed out'
 """
+FAST = ["git", "diff", "--cached", "--check"]
+
+
+def exited_unreaped(pid, seconds=8):
+    """Wait, without reaping, until this process's child has exited."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            status = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return False
+        if status is not None and status.si_pid == pid:
+            return True
+        time.sleep(.01)
+    return False
 
 
 class GateJobTests(RunFixture):
@@ -256,6 +272,28 @@ class GateJobTests(RunFixture):
         self.assertEqual(job["status"], "FAILED")
         self.assertFalse(job["outcome"]["returned"])
 
+    def test_failure_after_fast_child_exit_keeps_its_error_and_reaps_the_child(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [gate(FAST)]
+        self.begin(value)
+        self.implement()
+        original, failed = jobs._observe, []
+        def fail_after_exit(pid):
+            if pid != os.getpid() and not failed:
+                failed.append((pid, exited_unreaped(pid)))
+                raise e.RunError("process_unknown", "Injected fixture observation failure.")
+            return original(pid)
+        with mock.patch.object(jobs, "_observe", side_effect=fail_after_exit):
+            self.assert_code("process_unknown", e.execute_gate, self.root, task_id="value")
+        pid, exited = failed[0]
+        self.assertTrue(exited)
+        with self.assertRaises(ChildProcessError):
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        run = e.load(self.root)
+        job = next(iter(run["gate_jobs"].values()))
+        self.assertEqual((job["child_pid"], job["status"], job["outcome"]["error"]), (pid, "FAILED", "Injected fixture observation failure."))
+        self.assertEqual(run["gates"], [])
+
     def test_stale_revision_refused_before_job_start(self):
         self.begin()
         self.implement()
@@ -268,6 +306,85 @@ class GateJobTests(RunFixture):
         self.implement()
         receipt = e.execute_gate(self.root, task_id="value", expected_revision=e.load(self.root)["revision"])
         self.assertTrue(receipt["passed"])
+
+    def test_immediately_exiting_gate_passes_every_time(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [gate(FAST)]
+        self.begin(value)
+        self.implement()
+        observe = jobs._observe
+        def after_exit(pid):
+            exited_unreaped(pid)  # Each command ends before the runner inspects its child.
+            return observe(pid)
+        with mock.patch.object(jobs, "_observe", side_effect=after_exit):
+            receipts = [e.execute_gate(self.root, task_id="value") for _ in range(5)]
+        run = e.load(self.root)
+        self.assertEqual([receipt["passed"] for receipt in receipts], [True] * 5)
+        self.assertEqual([run["gate_jobs"][receipt["job_id"]]["status"] for receipt in receipts], ["SUCCEEDED"] * 5)
+        self.assertEqual(run["gates"][-5:], receipts)
+
+    def test_denied_liveness_probe_uses_exited_child_status_and_never_leaks_os_errors(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [gate(FAST)]
+        self.begin(value)
+        self.implement()
+        real, denied = os.kill, []
+        def sandboxed(pid, sig):
+            # The sandbox refuses liveness probes of an exited, not yet reaped gate child.
+            if sig == 0 and pid != os.getpid() and exited_unreaped(pid):
+                denied.append(pid)
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            return real(pid, sig)
+        with self.subTest(case="gate child"), mock.patch.object(os, "kill", side_effect=sandboxed):
+            receipt = e.execute_gate(self.root, task_id="value")
+            job = e.load(self.root)["gate_jobs"][receipt["job_id"]]
+            self.assertTrue(receipt["passed"])
+            self.assertEqual(receipt["exit_code"], 0)
+            self.assertEqual(job["status"], "SUCCEEDED")
+            self.assertEqual(denied, [job["child_pid"]])
+            self.assertIsNone(job["child_identity"])
+            self.assertTrue(job["outcome"]["children_confirmed_ended"])
+        other = subprocess.Popen([sys.executable, "-B", "-c", ""])
+        other.wait(timeout=10)  # Reaped: this PID is no longer a child of the runner.
+        probes = []
+        def refused(pid, sig, allowed=0):
+            if sig == 0 and pid == other.pid:
+                probes.append(pid)
+                if len(probes) > allowed:
+                    raise PermissionError(errno.EPERM, "Operation not permitted")
+                return None
+            return real(pid, sig)
+        with self.subTest(case="first probe of a non-child"), mock.patch.object(os, "kill", side_effect=refused):
+            self.assert_code("process_unknown", jobs._observe, other.pid)
+        if sys.platform == "darwin":
+            probes.clear()
+            with self.subTest(case="fallback probe of a non-child"), mock.patch.object(os, "kill", side_effect=lambda pid, sig: refused(pid, sig, 1)):
+                self.assert_code("process_unknown", jobs._observe, other.pid)
+                self.assertEqual(len(probes), 2)
+
+    def test_passing_gate_adds_four_revisions_and_plan_drift_still_refuses_its_receipt(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [gate(), self.controlled_gate("first")]
+        self.begin(value)
+        self.implement()
+        before = e.load(self.root)
+        receipt = e.execute_gate(self.root, task_id="value")
+        run = e.load(self.root)
+        self.assertEqual(run["revision"] - before["revision"], 4)
+        self.assertEqual([entry["event"] for entry in run["history"][len(before["history"]):]],
+                         ["gate_job_started", "gate_process_started", "gate_process_identified", "gate_job_finished"])
+        self.assertEqual(run["gates"], before["gates"] + [receipt])
+        self.assertEqual(run["gate_jobs"][receipt["job_id"]]["receipt"], receipt)
+        self.assertEqual(run["gate_jobs"][receipt["job_id"]]["status"], "SUCCEEDED")
+        with self.assertRaises(e.RunError) as caught:
+            with self.running(index=1) as (_, job):
+                jobs._checkpoint(self.root, "fixture_plan_drift", lambda current: current.update(plan_hash="0" * 64))
+        self.assertEqual(caught.exception.code, "plan_drift")
+        run = e.load(self.root)
+        drifted = run["gate_jobs"][job["id"]]
+        self.assertEqual(run["gates"], before["gates"] + [receipt])
+        self.assertEqual((drifted["status"], drifted["outcome"]["error"], drifted["outcome"]["returned"]), ("FAILED", "Plan changed while gate executed.", False))
+        self.assertNotIn("receipt", drifted)
 
     def crashed(self, with_child=False):
         self.begin()
@@ -357,6 +474,44 @@ crash(sys.argv[2], task_id='value')
         job = self.crashed()
         jobs.recover(self.root, job["id"], "Fixture crash was observed.")
         self.assert_code("job_state", jobs.recover, self.root, job["id"], "Duplicate recovery should be refused.")
+
+    def test_crash_before_finishing_checkpoint_leaves_no_receipt_and_recovers(self):
+        self.begin()
+        self.implement()
+        script = """import os, sys
+sys.path.insert(0, sys.argv[1])
+import run_engine as e
+checkpoint = e.gate_jobs._checkpoint
+def crash(root, event, mutate, expected_revision=None):
+    if event in {'gate_job_finished', 'gate_job_requires_recovery'}:
+        os._exit(19)
+    return checkpoint(root, event, mutate, expected_revision)
+e.gate_jobs._checkpoint = crash
+e.execute_gate(sys.argv[2], task_id='value')
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", script, str(SCRIPTS), str(self.root)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 19, result.stderr)
+        run = e.load(self.root)
+        job = next(iter(run["gate_jobs"].values()))
+        self.assertEqual(run["gates"], [])
+        self.assertEqual(job["status"], "RUNNING")
+        self.assertEqual([child["pid"] for child in job["children"]], [job["child_pid"]])
+        self.assert_code("resource_recovery_required", e.execute_gate, self.root, task_id="value")
+        self.assertEqual(jobs.recover(self.root, job["id"], "Fixture runner exited with status 19 after reaping its child.")["gate_jobs"][job["id"]]["status"], "INTERRUPTED")
+        receipt = e.execute_gate(self.root, task_id="value")
+        self.assertTrue(receipt["passed"])
+        self.assertEqual(e.load(self.root)["gates"], [receipt])
+
+
+class ProcessObservationTests(unittest.TestCase):
+    def test_exited_unreaped_child_is_not_alive_and_keeps_its_exit_status(self):
+        process = subprocess.Popen([sys.executable, "-B", "-c", "raise SystemExit(5)"])
+        self.addCleanup(process.wait)
+        self.assertTrue(exited_unreaped(process.pid))
+        self.assertIs(jobs._observe(process.pid)["alive"], False)
+        self.assertTrue(exited_unreaped(process.pid), "Observation must not reap the child.")
+        self.assertEqual(process.wait(timeout=5), 5)
+        self.assertIs(jobs._observe(process.pid)["alive"], False)
 
 
 class ResourcePlanTests(unittest.TestCase):
