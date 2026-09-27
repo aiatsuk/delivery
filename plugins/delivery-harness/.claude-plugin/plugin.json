@@ -4,5 +4,6 @@
   "repository": "https://github.com/aiatsuk/delivery",
   "description": "One evidence-bound product-to-PR delivery workflow.",
   "author": {"name": "Andrei Iatsuk"},
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "workflows": "./skills/delivery/workflows/"
 }
