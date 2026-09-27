@@ -14,44 +14,55 @@ export const meta = {
 
 const A = args
 
+// Mirrors the engine's report validation, so a report the engine would refuse fails here and
+// is retried by the host instead of leaving the dispatch without an importable result.
+const TEXT = { type: 'string', minLength: 1 }
 const REPORT = {
   type: 'object',
   properties: {
-    dispatch_id: { type: 'string' },
-    summary: { type: 'string' },
+    dispatch_id: TEXT,
+    summary: TEXT,
     tests: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          command: { type: 'array', items: { type: 'string' } },
+          command: { type: 'array', items: TEXT, minItems: 1 },
           exit_code: { type: 'integer' },
-          outcome: { type: 'string' },
+          outcome: TEXT,
         },
         required: ['command', 'exit_code', 'outcome'],
       },
     },
-    limitations: { type: 'array', items: { type: 'string' } },
+    limitations: { type: 'array', items: TEXT },
+    tree: TEXT,
   },
-  required: ['dispatch_id', 'summary', 'tests', 'limitations'],
+  required: ['dispatch_id', 'summary', 'tests', 'limitations', 'tree'],
 }
 
 const argv = command => command.map(part => JSON.stringify(part)).join(' ')
 const list = xs => xs.map(x => `- ${x}`).join('\n')
+// Gates come from the task contract as {command, risk, ...}; bare argument arrays are safe gates.
+const gateOf = g => (Array.isArray(g) ? { command: g, risk: 'safe' } : g)
+const safeGates = gates => gates.map(gateOf).filter(g => g.risk === 'safe').map(g => argv(g.command))
+const otherGates = gates => gates.map(gateOf).filter(g => g.risk !== 'safe').length
 
 function brief(t) {
   const extra = t.instructions ? `\n\nFindings to address in this dispatch (quoted from the gate or review):\n${t.instructions}` : ''
   return `You are the implementation worker for task ${t.task} of Delivery Harness run ${A.run_root}.\n` +
     `Read the task contract ${t.brief} in full first. Worktree: ${t.worktree} (branch ${t.branch}). ` +
     `Owned paths:\n${list(t.paths)}\nAcceptance: ${t.acceptance}\n` +
-    `Planned gates (argument arrays; run them from the worktree):\n${list(t.gates.map(argv))}${extra}\n\n` +
+    `Planned safe gates (argument arrays; run them from the worktree):\n${list(safeGates(t.gates))}\n` +
+    (otherGates(t.gates) ? `Do not run the ${otherGates(t.gates)} other planned gate(s): they have external or destructive effects and run only under the coordinator's authority.\n` : '') +
+    `${extra}\n` +
     'You are not alone in this repository. Work only in your assigned worktree and owned paths. ' +
     "Do not revert others' changes. Preserve any unexpected work and report it. Stage exact intended files. " +
     'Do not commit, push, open a PR, merge, deploy, or mutate product/session records. Report actual tests and limitations. ' +
     'Put no AI or tool names into code, comments or messages.\n\n' +
     `Return the report as the structured output. dispatch_id must be exactly ${t.dispatch_id}. ` +
     'summary: what actually changed and why. tests: every command you ran as an argument array, its exit code and the observed outcome ' +
-    '(an empty list means no tests ran). limitations: specific behaviour you did not check.'
+    '(an empty list means no tests ran). limitations: specific behaviour you did not check. ' +
+    `tree: the output of \`git -C ${JSON.stringify(t.worktree)} write-tree\` after your final staging.`
 }
 
 const results = await parallel(A.tasks.map(t => () => agent(brief(t), {
