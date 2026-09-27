@@ -218,13 +218,18 @@ def _remote(path: Path, remote: str) -> str:
     return os.fsdecode(result.stdout).strip()
 
 
-def _base_ref(path: Path, remote: str, base: str) -> str:
-    _remote(path, remote)
+def _plain_branch(path: Path, base: str) -> str:
     if not isinstance(base, str) or base.startswith(("-", "refs/")):
         raise GitError("INVALID_BRANCH", "Use a plain branch name.")
     result = _git(path, "check-ref-format", "--branch", base, check=False)
     if result.returncode or "@{" in base:
         raise GitError("INVALID_BRANCH", "Invalid base branch name.")
+    return base
+
+
+def _base_ref(path: Path, remote: str, base: str) -> str:
+    _remote(path, remote)
+    _plain_branch(path, base)
     return f"refs/remotes/{remote}/{base}"
 
 
@@ -304,6 +309,57 @@ def prepare_primary(path: str | Path, remote: str = "origin", base: str = "main"
     result = inspect_repo(primary)
     result.update({"remote": remote, "remote_url": _remote(primary, remote),
                    "base": base, "base_sha": target})
+    return result
+
+
+def _local_base(primary: Path, base: str) -> str:
+    _plain_branch(primary, base)
+    _no_operations(primary)
+    _clean(primary)
+    current = _branch(primary)
+    if current != base:
+        raise GitError("LOCAL_BASE_BRANCH",
+                       f"The primary checkout is on {current or 'a detached HEAD'}, not {base}; switch it explicitly before local-only work.",
+                       {"branch": current, "base": base})
+    head = _head(primary)
+    if _ref_sha(primary, f"refs/heads/{base}") != head:
+        raise GitError("BASE_CHANGED", "The local base branch changed during inspection; inspect it again.")
+    return head
+
+
+def prepare_local_primary(path: str | Path, base: str = "main") -> dict:
+    """Check a clean primary on its local base branch; no fetch, remote, or branch switch."""
+    primary = canonical_repo(path)
+    head = _local_base(primary, base)
+    result = inspect_repo(primary)
+    if result["head"] != head or result["branch"] != base:
+        raise GitError("BASE_CHANGED", "The local base branch changed during inspection; inspect it again.")
+    result.update({"remote": None, "base": base, "base_sha": head})
+    return result
+
+
+def fast_forward_local_base(path: str | Path, target_sha: str, expected_head: str,
+                            base: str = "main") -> dict:
+    """Fast-forward a clean local base from an exact expected head; no reset, rebase, or remote."""
+    primary = canonical_repo(path)
+    _sha(primary, target_sha)
+    _sha(primary, expected_head)
+    previous = _local_base(primary, base)
+    if previous != expected_head:
+        raise GitError("MAIN_MOVED", "The local base branch moved from its expected head; it was preserved.",
+                       {"head": previous, "expected_head": expected_head})
+    if _git(primary, "merge-base", "--is-ancestor", expected_head, target_sha, check=False).returncode:
+        raise GitError("NOT_FAST_FORWARD", "The target commit does not descend from the local base head.",
+                       {"head": previous, "target": target_sha})
+    _ignored_collisions(primary, target_sha)
+    if _local_base(primary, base) != expected_head:
+        raise GitError("MAIN_MOVED", "The local base branch moved during the fast-forward checks; it was preserved.")
+    _git(primary, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-autostash",
+         "--no-overwrite-ignore", "--no-stat", "--quiet", target_sha)
+    if _head(primary) != target_sha or _ref_sha(primary, f"refs/heads/{base}") != target_sha:
+        raise GitError("BASE_CHANGED", "The local base branch does not equal the fast-forward target; inspect it.")
+    result = inspect_repo(primary)
+    result.update({"remote": None, "base": base, "previous_head": previous, "base_sha": target_sha})
     return result
 
 

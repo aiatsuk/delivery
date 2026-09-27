@@ -127,6 +127,20 @@ def _history(value, label, limit):
     return value
 
 
+LOCAL_ONLY = "This run is local-only; use finish-local."
+MAIN_MOVED = ("Main moved after this local-only run started; local rebase is not automated. "
+              "Integrate the new main explicitly, or finish without --fast-forward-main.")
+
+
+def _refuse_local(root):
+    """Stop publication commands for a local-only run before any Git or provider call."""
+    try:
+        run = engine.load(root)
+    except engine.RunError:
+        return  # The guarded command reports its own missing or invalid run.
+    engine.require(run.get("delivery_mode", "github") != "local", "local_only_run", LOCAL_ONLY)
+
+
 def _checkpoint(run):
     """Persist an intent/receipt while the enclosing run transaction owns the lock.
 
@@ -299,6 +313,7 @@ def commit(root, message, expected_revision=None):
 
 
 def publish(root, title, body, expected_revision=None, *, provider=None):
+    _refuse_local(root)
     title, body = _history(title, "PR title", 250), _history(body, "PR body", 60_000)
     engine.require("\n" not in title, "history_policy", "The PR title must be a single line.")
     failure = None
@@ -383,6 +398,7 @@ def _merge_grant(run):
 
 
 def refresh(root, expected_revision=None, *, provider=None):
+    _refuse_local(root)
     failure = None
     with engine.transaction(root, "publication_base_refreshed", expected_revision) as run:
         engine.assert_gates_idle(run)
@@ -496,6 +512,7 @@ def _merged(run, pr):
 
 
 def merge(root, expected_revision=None, *, provider=None):
+    _refuse_local(root)
     failure = None
     with engine.transaction(root, "pr_merge_checked", expected_revision) as run:
         engine.assert_gates_idle(run)
@@ -547,7 +564,99 @@ def merge(root, expected_revision=None, *, provider=None):
     return engine.load(root)
 
 
+def _preserve_history(run, cleanup_state):
+    """Record prior versions and attempts that retirement deliberately keeps."""
+    cleanup_state["preserved_prior_versions"] = [
+        {"version": version.get("version"), "worktrees": [owner["path"] for owner in list(version.get("tasks", {}).values())
+         + ([version["integration"]] if version.get("integration") else [])]}
+        for version in run.get("previous_versions", run.get("prior_versions", []))]
+    prior_attempts = []
+    def preserve_attempts(key, owner):
+        for previous in owner.get("previous_attempts", []):
+            prior_attempts.append({"owner": key, "path": previous["path"], "branch": previous["branch"],
+                                   "ownership_receipt": previous.get("ownership_receipt")})
+            preserve_attempts(key, previous)
+    for key, owner in list(run["tasks"].items()) + [("integration", run["integration"])]:
+        preserve_attempts(key, owner)
+    cleanup_state["preserved_prior_attempts"] = prior_attempts
+
+
+def _prepare_removals(run, receipts, owners, integration_head, integration_message):
+    """Verify and record every owned tree before the first removal, then persist the receipts."""
+    # Verify the whole dependency graph while every task tree still
+    # exists. Later exact commits/removals cannot invalidate this saved
+    # cleanup evidence merely by retiring an upstream task first.
+    for key, owner in owners:
+        if key in receipts:
+            continue
+        task_id = None if key == "integration" else key
+        info = _owned(run, owner, task_id)
+        engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
+                       and not git_ops._artifact_inventory(Path(owner["path"])),
+                       "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
+        if task_id:
+            engine.verify_task_current(run, task_id)
+            snapshot = engine.snapshot(run, task_id)
+        else:
+            engine.require(info["head"] == integration_head and info["status"]["clean"], "cleanup_identity", integration_message)
+            snapshot = engine.snapshot(run)
+        receipts[key] = {"path": owner["path"], "branch": owner["branch"], "head": info["head"],
+                         "content": snapshot["content"], "files": snapshot["files"], "removed": False}
+    _checkpoint(run)
+
+
+def _remove_prepared(run, receipts, owners):
+    """Remove each prepared owned tree, recovering interrupted removals and commits."""
+    for key, owner in owners:
+        receipt = receipts.get(key)
+        if receipt and receipt.get("removed"):
+            continue
+        if receipt and not Path(owner["path"]).exists() and not Path(owner["path"]).is_symlink():
+            purpose = "integration" if key == "integration" else "task-" + key
+            creation = engine._load_worktree_receipt(run, purpose, owner.get("attempt", 0))
+            engine.require(creation["path"] == owner["path"] == receipt["path"]
+                           and creation["branch"] == owner["branch"] == receipt["branch"],
+                           "cleanup_identity", "The interrupted cleanup no longer matches its durable creation receipt.")
+            registered = git_ops._worktrees(Path(run["primary"]))
+            engine.require(not any(row.get("worktree") == owner["path"] for row in registered), "cleanup_missing", "A missing worktree still has a Git registration; preserve its ownership record.")
+            branch_head = git_ops._ref_sha(Path(run["primary"]), "refs/heads/" + owner["branch"])
+            engine.require(branch_head == receipt["head"], "cleanup_identity", "The preserved branch changed after cleanup was interrupted.")
+            receipt.update(removed=True, recovered=True, branch_preserved=True)
+            _checkpoint(run)
+            continue
+        task_id = None if key == "integration" else key
+        info = _owned(run, owner, task_id)
+        engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
+                       and not git_ops._artifact_inventory(Path(owner["path"])),
+                       "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
+        if info["head"] != receipt["head"] and receipt.get("commit_intent"):
+            recovered = _recover_exact_commit(owner["path"], receipt["commit_intent"])
+            if recovered:
+                receipt["head"] = recovered["head"]
+                receipt["committed_reviewed_files"] = git_ops._diff_names(Path(owner["path"]), recovered["previous_head"], recovered["head"])
+                receipt["commit_recovered"] = True
+                _checkpoint(run)
+        engine.require(info["head"] == receipt["head"], "cleanup_identity", "The worktree HEAD changed after cleanup was prepared.")
+        before = git_ops.inventory(owner["path"], owner["base_sha"])
+        engine.require(before["content_fingerprint"] == receipt["content"], "cleanup_changed", "Reviewed content changed after cleanup was prepared.")
+        if not info["status"]["clean"]:
+            engine.require(task_id is not None and not info["status"]["unstaged"], "cleanup_dirty", "Only exact reviewed staged task changes may be committed during cleanup.")
+            receipt["commit_intent"] = {"head": info["head"], "base_sha": owner["base_sha"], "content": receipt["content"],
+                                        "files": receipt["files"], "message": "Preserve reviewed task result"}
+            _checkpoint(run)
+            committed = git_ops.commit_changes(owner["path"], receipt["files"], "Preserve reviewed task result")
+            receipt["head"] = committed["head"]
+            receipt["committed_reviewed_files"] = committed["files"]
+            _checkpoint(run)
+            after = git_ops.inventory(owner["path"], owner["base_sha"])
+            engine.require(after["content_fingerprint"] == receipt["content"], "cleanup_changed", "The cleanup commit changed reviewed content; preserve the worktree.")
+        result = git_ops.remove_worktree(run["primary"], owner["path"], receipt["branch"], receipt["head"])
+        receipt.update(removed=result["removed"], branch_preserved=result["branch_preserved"], at=engine.now())
+        _checkpoint(run)
+
+
 def cleanup(root, expected_revision=None, *, provider=None):
+    _refuse_local(root)
     current = engine.load(root)
     if current["state"] == "COMPLETE":
         engine.require(expected_revision is None or expected_revision == current["revision"], "stale_revision", "Reload the completed run before retrying cleanup.")
@@ -569,88 +678,13 @@ def cleanup(root, expected_revision=None, *, provider=None):
                        "merge_not_in_main", "Fresh primary main does not contain the confirmed merge commit.")
         cleanup_state = run.setdefault("cleanup", {"worktrees": {}, "preserved_prior_versions": [], "blockers": []})
         cleanup_state["primary_head"] = primary["head"]
-        cleanup_state["preserved_prior_versions"] = [
-            {"version": version.get("version"), "worktrees": [owner["path"] for owner in list(version.get("tasks", {}).values())
-             + ([version["integration"]] if version.get("integration") else [])]}
-            for version in run.get("previous_versions", run.get("prior_versions", []))]
-        prior_attempts = []
-        def preserve_attempts(key, owner):
-            for previous in owner.get("previous_attempts", []):
-                prior_attempts.append({"owner": key, "path": previous["path"], "branch": previous["branch"],
-                                       "ownership_receipt": previous.get("ownership_receipt")})
-                preserve_attempts(key, previous)
-        for key, owner in list(run["tasks"].items()) + [("integration", run["integration"])]:
-            preserve_attempts(key, owner)
-        cleanup_state["preserved_prior_attempts"] = prior_attempts
+        _preserve_history(run, cleanup_state)
         cleanup_state["blockers"] = []
         owners = [(task_id, owner) for task_id, owner in run["tasks"].items()] + [("integration", run["integration"])]
         try:
-            # Verify the whole dependency graph while every task tree still
-            # exists. Later exact commits/removals cannot invalidate this saved
-            # cleanup evidence merely by retiring an upstream task first.
-            for key, owner in owners:
-                if key in cleanup_state["worktrees"]:
-                    continue
-                task_id = None if key == "integration" else key
-                info = _owned(run, owner, task_id)
-                engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
-                               and not git_ops._artifact_inventory(Path(owner["path"])),
-                               "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
-                if task_id:
-                    engine.verify_task_current(run, task_id)
-                    snapshot = engine.snapshot(run, task_id)
-                else:
-                    engine.require(info["head"] == run["merge"]["head"] and info["status"]["clean"], "cleanup_identity", "The merged integration worktree changed after merge.")
-                    snapshot = engine.snapshot(run)
-                cleanup_state["worktrees"][key] = {"path": owner["path"], "branch": owner["branch"], "head": info["head"],
-                                                  "content": snapshot["content"], "files": snapshot["files"], "removed": False}
-            _checkpoint(run)
-            for key, owner in owners:
-                receipt = cleanup_state["worktrees"].get(key)
-                if receipt and receipt.get("removed"):
-                    continue
-                if receipt and not Path(owner["path"]).exists() and not Path(owner["path"]).is_symlink():
-                    purpose = "integration" if key == "integration" else "task-" + key
-                    creation = engine._load_worktree_receipt(run, purpose, owner.get("attempt", 0))
-                    engine.require(creation["path"] == owner["path"] == receipt["path"]
-                                   and creation["branch"] == owner["branch"] == receipt["branch"],
-                                   "cleanup_identity", "The interrupted cleanup no longer matches its durable creation receipt.")
-                    registered = git_ops._worktrees(Path(run["primary"]))
-                    engine.require(not any(row.get("worktree") == owner["path"] for row in registered), "cleanup_missing", "A missing worktree still has a Git registration; preserve its ownership record.")
-                    branch_head = git_ops._ref_sha(Path(run["primary"]), "refs/heads/" + owner["branch"])
-                    engine.require(branch_head == receipt["head"], "cleanup_identity", "The preserved branch changed after cleanup was interrupted.")
-                    receipt.update(removed=True, recovered=True, branch_preserved=True)
-                    _checkpoint(run)
-                    continue
-                task_id = None if key == "integration" else key
-                info = _owned(run, owner, task_id)
-                engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
-                               and not git_ops._artifact_inventory(Path(owner["path"])),
-                               "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
-                if info["head"] != receipt["head"] and receipt.get("commit_intent"):
-                    recovered = _recover_exact_commit(owner["path"], receipt["commit_intent"])
-                    if recovered:
-                        receipt["head"] = recovered["head"]
-                        receipt["committed_reviewed_files"] = git_ops._diff_names(Path(owner["path"]), recovered["previous_head"], recovered["head"])
-                        receipt["commit_recovered"] = True
-                        _checkpoint(run)
-                engine.require(info["head"] == receipt["head"], "cleanup_identity", "The worktree HEAD changed after cleanup was prepared.")
-                before = git_ops.inventory(owner["path"], owner["base_sha"])
-                engine.require(before["content_fingerprint"] == receipt["content"], "cleanup_changed", "Reviewed content changed after cleanup was prepared.")
-                if not info["status"]["clean"]:
-                    engine.require(task_id is not None and not info["status"]["unstaged"], "cleanup_dirty", "Only exact reviewed staged task changes may be committed during cleanup.")
-                    receipt["commit_intent"] = {"head": info["head"], "base_sha": owner["base_sha"], "content": receipt["content"],
-                                                "files": receipt["files"], "message": "Preserve reviewed task result"}
-                    _checkpoint(run)
-                    committed = git_ops.commit_changes(owner["path"], receipt["files"], "Preserve reviewed task result")
-                    receipt["head"] = committed["head"]
-                    receipt["committed_reviewed_files"] = committed["files"]
-                    _checkpoint(run)
-                    after = git_ops.inventory(owner["path"], owner["base_sha"])
-                    engine.require(after["content_fingerprint"] == receipt["content"], "cleanup_changed", "The cleanup commit changed reviewed content; preserve the worktree.")
-                result = git_ops.remove_worktree(run["primary"], owner["path"], receipt["branch"], receipt["head"])
-                receipt.update(removed=result["removed"], branch_preserved=result["branch_preserved"], at=engine.now())
-                _checkpoint(run)
+            _prepare_removals(run, cleanup_state["worktrees"], owners, run["merge"]["head"],
+                              "The merged integration worktree changed after merge.")
+            _remove_prepared(run, cleanup_state["worktrees"], owners)
             if run.get("product"):
                 import product
                 context = run["product"]
@@ -668,6 +702,131 @@ def cleanup(root, expected_revision=None, *, provider=None):
             # Product memory may fail after all Git cleanup completed. Keep its
             # receipt retryable instead of claiming COMPLETE or losing progress.
             cleanup_state["blockers"] = [{"code": getattr(error, "code", "outcome_failed"), "message": "The durable outcome was not recorded; preserve the run and retry cleanup."}]
+            failure = engine.RunError(cleanup_state["blockers"][0]["code"], cleanup_state["blockers"][0]["message"])
+    if failure:
+        raise failure
+    return engine.load(root)
+
+
+def _local_main(run, expected):
+    """Return the clean local main HEAD, refusing a primary that moved from ``expected``."""
+    primary = git_ops.prepare_local_primary(run["primary"])
+    engine.require(primary["base_sha"] == expected, "main_moved", MAIN_MOVED)
+    return primary["base_sha"]
+
+
+def _finish_started(run, intent):
+    """True once a local finish may have moved main or retired a worktree."""
+    if not intent or intent["phase"] == "prepared":
+        return False
+    if intent["phase"] == "fast_forward_attempted":
+        return git_ops._ref_sha(Path(run["primary"]), "refs/heads/main") == intent["head"]
+    return True
+
+
+def _fast_forward_main(run, intent):
+    """Fast-forward local main to the exact committed head, recovering a lost receipt."""
+    primary = git_ops.prepare_local_primary(run["primary"])
+    if not (intent["phase"] == "fast_forward_attempted" and primary["base_sha"] == intent["head"]):
+        engine.require(primary["base_sha"] == intent["base_sha"], "main_moved", MAIN_MOVED)
+        intent["phase"] = "fast_forward_attempted"
+        _checkpoint(run)
+        try:
+            git_ops.fast_forward_local_base(run["primary"], intent["head"], intent["base_sha"])
+        except git_ops.GitError as error:
+            if error.code == "MAIN_MOVED":
+                raise engine.RunError("main_moved", MAIN_MOVED) from error
+            raise
+    final = git_ops.prepare_local_primary(run["primary"])
+    engine.require(final["base_sha"] == intent["head"], "main_moved", "Main does not equal the committed integration head after the fast-forward.")
+    intent.update(phase="fast_forwarded", main_head=final["base_sha"])
+    _checkpoint(run)
+
+
+def finish_local(root, expected_revision=None, *, fast_forward=False):
+    """Finish a verified, committed local-only run without any remote or provider.
+
+    The committed integration branch is the delivered result. Owned task trees
+    are retired with the same checks and recovery as ``cleanup``. With explicit
+    local-merge authority, main is fast-forwarded to the exact committed head and
+    the integration tree is retired too. Every branch is preserved.
+    """
+    engine.require(type(fast_forward) is bool, "invalid_input", "fast_forward must be true or false.")
+    current = engine.load(root)
+    engine.require(current.get("delivery_mode", "github") == "local", "not_local_run",
+                   "finish-local applies only to a local-only run; GitHub runs publish, merge and clean up.")
+    if current["state"] == "COMPLETE":
+        engine.require(expected_revision is None or expected_revision == current["revision"], "stale_revision", "Reload the completed run before retrying finish-local.")
+        return current
+    failure = None
+    with engine.transaction(root, "local_run_finished", expected_revision) as run:
+        engine.assert_gates_idle(run)
+        engine.require(run["state"] == "READY_TO_PUBLISH", "finish_local_state", "Finish a local-only run after release readiness and its exact commit.")
+        engine.assert_plan(run)
+        if fast_forward:
+            engine.need_authority(run, "local-merge")
+        intent = run.get("local_finish")
+        cleanup_state = run.setdefault("cleanup", {"worktrees": {}, "preserved_prior_versions": [], "blockers": []})
+        if _finish_started(run, intent):
+            # Main moved or a tree was retired: continue that exact attempt.
+            engine.require(intent["fast_forward"] == fast_forward, "local_finish_mode",
+                           "Retry finish-local with the same --fast-forward-main choice as the started attempt.")
+            engine.require((run.get("commit") or {}).get("head") == intent["head"], "head_changed",
+                           "The committed integration head changed after finish-local started.")
+            if not fast_forward:
+                _committed(run)
+        else:
+            # Nothing irreversible happened yet: validate from scratch.
+            _validated(run)
+            info = _committed(run)
+            if fast_forward:
+                _local_main(run, run["base_sha"])
+            intent = {"branch": info["branch"], "head": info["head"], "base_sha": run["base_sha"],
+                      "fast_forward": fast_forward, "phase": "prepared", "at": engine.now()}
+            run["local_finish"] = intent
+            cleanup_state["worktrees"] = {}
+        _preserve_history(run, cleanup_state)
+        cleanup_state["blockers"] = []
+        owners = [(task_id, owner) for task_id, owner in run["tasks"].items()]
+        if fast_forward:
+            owners.append(("integration", run["integration"]))
+        try:
+            _prepare_removals(run, cleanup_state["worktrees"], owners, intent["head"],
+                              "The committed integration worktree changed after its commit.")
+            if fast_forward and intent["phase"] in {"prepared", "fast_forward_attempted"}:
+                _fast_forward_main(run, intent)
+            if intent["phase"] != "retiring":
+                intent["phase"] = "retiring"
+                _checkpoint(run)
+            _remove_prepared(run, cleanup_state["worktrees"], owners)
+            if not fast_forward:
+                _committed(run)
+            main_head = git_ops._ref_sha(Path(run["primary"]), "refs/heads/main")
+            if fast_forward:
+                engine.require(main_head == intent["head"], "main_moved", "Main no longer equals the fast-forwarded integration head.")
+            cleanup_state["primary_head"] = main_head
+            run["local_outcome"] = {"branch": intent["branch"], "head": intent["head"], "fast_forwarded": fast_forward,
+                                    "main_head": main_head, "at": engine.now()}
+            if run.get("product"):
+                import product
+                context = run["product"]
+                work_item = (context.get("work_item") or {}).get("path")
+                summary = f"Finished local-only run on branch {intent['branch']} at {intent['head']}."
+                if fast_forward:
+                    summary += " Fast-forwarded main."
+                run["product_outcome"] = product.record_outcome(
+                    context["root"], run["id"], summary,
+                    [str(Path(run["root"]) / "plan.json"), str(Path(run["root"]) / "run.json")],
+                    "Use the committed local branch and linked verification evidence when planning the next change.",
+                    work_item=work_item)
+            run["state"] = "COMPLETE"
+            run["recovery"] = None
+        except (engine.RunError, git_ops.GitError, OSError) as error:
+            cleanup_state["blockers"] = [{"code": getattr(error, "code", "finish_local_failed"), "message": str(error)}]
+            failure = error
+        except Exception as error:
+            # As in cleanup, a product-memory failure keeps the run retryable.
+            cleanup_state["blockers"] = [{"code": getattr(error, "code", "outcome_failed"), "message": "The durable outcome was not recorded; preserve the run and retry finish-local."}]
             failure = engine.RunError(cleanup_state["blockers"][0]["code"], cleanup_state["blockers"][0]["message"])
     if failure:
         raise failure

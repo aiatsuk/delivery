@@ -1,9 +1,11 @@
 """Same-scope review corrections use actual-dispatch-shaped, synthetic receipts."""
+import json
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
-from tests.test_run_engine import RunFixture, e, gate, git, plan
+from tests.test_run_engine import RunFixture, SCRIPTS, e, gate, git, plan
 
 
 class IntegrationFixTests(RunFixture):
@@ -98,6 +100,77 @@ class IntegrationFixTests(RunFixture):
         self.assertNotEqual(ready["validated"]["content"], before["integration_fix"]["report"]["snapshot"]["content"])
         self.assertEqual(self.register("new-version")["integration_fix"]["attempt"], 1)
 
+    def exhaust_default_budget(self):
+        for suffix in ("one", "two"):
+            self.register(suffix)
+            self.report_correction()
+        with self.assertRaises(e.RunError) as caught:
+            self.register("three")
+        self.assertEqual("rework_budget", caught.exception.code)
+        return caught.exception
+
+    def test_fix_budget_extension_is_explicit_bounded_and_counted(self):
+        self.setup_integration()
+        refused = self.exhaust_default_budget()
+        self.assertIn("authorize --scope fix-budget --count N", refused.message)
+        self.assertEqual({"used": 2, "limit": 2}, e.status(self.root)["fix_budget"])
+        for count in (None, 0, 4, True, "1"):
+            with self.subTest(count=count), self.assertRaises(e.RunError) as caught:
+                e.authorize(self.root, "fix-budget", "fixture-user", "Synthetic invalid extension.", count=count)
+            self.assertEqual("invalid_fix_budget", caught.exception.code)
+        with self.assertRaises(e.RunError) as caught:
+            e.authorize(self.root, "implement", "fixture-user", "Synthetic authority.", count=1)
+        self.assertEqual("invalid_authorization_count", caught.exception.code)
+        evidence = self.home / "fix-budget.md"
+        evidence.write_text("Synthetic explicit extension of one integration-fix round.\n")
+        result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "delivery.py"), "authorize", "--run", str(self.root),
+                                 "--scope", "fix-budget", "--count", "1", "--actor", "fixture-user", "--evidence-file", str(evidence)],
+                                capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        grants = json.loads(result.stdout)["result"]["fix_budget_grants"]
+        self.assertEqual([(1, "fixture-user", e.load(self.root)["plan_hash"])],
+                         [(grant["count"], grant["actor"], grant["plan_hash"]) for grant in grants])
+        self.assertNotIn("fix-budget", e.load(self.root)["authorizations"])
+        self.assertEqual(3, self.register("three")["integration_fix"]["attempt"])
+        self.report_correction()
+        with self.assertRaises(e.RunError) as caught:
+            self.register("four")
+        self.assertEqual("rework_budget", caught.exception.code)
+        self.assertEqual({"used": 3, "limit": 3}, e.status(self.root)["fix_budget"])
+
+    def test_fix_budget_grant_for_an_older_plan_does_not_count(self):
+        e.set_plan(self.root, plan())
+        with self.assertRaises(e.RunError) as caught:
+            e.authorize(self.root, "fix-budget", "fixture-user", "Synthetic early extension.", count=1)
+        self.assertEqual("fix_budget_state", caught.exception.code)
+        self.setup_integration()
+        e.authorize(self.root, "fix-budget", "fixture-user", "Synthetic extension for the prefix plan.", count=3)
+        old_hash = e.load(self.root)["plan_hash"]
+        e.revise(self.root, "The authorized fixture now requires the exact value, not a prefix.")
+        self.begin()
+        self.implement()
+        self.verify()
+        e.integrate(self.root)
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        e.review(self.root, "fixture-next-reviewer", "PASS", "Synthetic independent review of the exact-value plan.")
+        current = e.ready(self.root)
+        self.assertNotEqual(old_hash, current["plan_hash"])
+        self.assertEqual([old_hash], [grant["plan_hash"] for grant in current["fix_budget_grants"]])
+        self.exhaust_default_budget()
+        self.assertEqual({"used": 2, "limit": 2}, e.status(self.root)["fix_budget"])
+
+
+    def test_fix_budget_grant_does_not_revive_for_an_identical_plan_approved_again(self):
+        self.setup_integration()
+        e.authorize(self.root, "fix-budget", "fixture-user", "Synthetic extension for the first version.", count=2)
+        first = e.load(self.root)
+        e.revise(self.root, "Synthetic revision that ends with the same plan.")
+        self.setup_integration()
+        second = e.load(self.root)
+        self.assertEqual(first["plan_hash"], second["plan_hash"])
+        self.assertNotEqual(first["spec_version"], second["spec_version"])
+        self.exhaust_default_budget()
+        self.assertEqual({"used": 2, "limit": 2}, e.status(self.root)["fix_budget"])
 
 if __name__ == "__main__":
     unittest.main()
