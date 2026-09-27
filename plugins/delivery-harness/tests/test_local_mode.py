@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.test_run_engine import RunFixture, SCRIPTS, e, git, plan
+from tests.test_run_engine import PASS_EVIDENCE, RunFixture, SCRIPTS, e, gate, git, plan
 import publisher as p
 
 
@@ -55,10 +55,35 @@ class LocalFixture(RunFixture):
         self.assertEqual(0, code, payload)
         self.root = Path(payload["result"]["root"])
 
-    def committed(self):
-        ready = self.integrated()
+    def committed(self, value=None):
+        if value is None:
+            ready = self.integrated()
+        else:
+            self.begin(value)
+            self.implement()
+            self.verify()
+            e.integrate(self.root)
+            self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+            e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
+            ready = e.ready(self.root)
         self.assertEqual(("READY_TO_PUBLISH", self.original), (ready["state"], ready["base_sha"]))
         return p.commit(self.root, "Update the fixture value")
+
+    def cache_writing_plan(self):
+        """A normal Python repository: gates leave an ignored __pycache__ in the tree they run in."""
+        (self.repo / ".gitignore").write_text("__pycache__/\n")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-m", "Ignore Python bytecode caches")
+        self.original = git(self.repo, "rev-parse", "HEAD")
+        check = gate([sys.executable, "-B", "-c",
+                      "from pathlib import Path; cache = Path('__pycache__'); cache.mkdir(exist_ok=True); "
+                      "(cache / 'value_check.cpython-310.pyc').write_bytes(b'cached'); "
+                      "assert Path('value.txt').read_text() == 'after\\n'"])
+        check["cleanup"] = "Leaves an ignored __pycache__ directory in the tree it ran in, as Python tooling does."
+        value = plan()
+        value["tasks"][0]["gates"] = [check]
+        value["verification"][0].update(check)
+        return value
 
     def authorize_cli(self, scope, *extra):
         evidence = self.home / f"evidence-{scope}.md"
@@ -130,6 +155,65 @@ class LocalModeTests(LocalFixture):
         self.assertFalse(Path(run["tasks"]["value"]["path"]).exists())
         self.assertEqual(head, git(self.repo, "rev-parse", "refs/heads/" + branch))
         self.assertEqual(result, p.finish_local(self.root, fast_forward=True))
+
+    def test_finish_local_preserves_and_lists_a_task_tree_with_ignored_gate_caches(self):
+        run = self.committed(self.cache_writing_plan())
+        task = run["tasks"]["value"]
+        cache = Path(task["path"]) / "__pycache__" / "value_check.cpython-310.pyc"
+        self.assertTrue(cache.is_file())
+        result = p.finish_local(self.root)
+        self.assertEqual("COMPLETE", result["state"])
+        self.assertEqual([{"owner": "value", "path": task["path"], "branch": task["branch"], "head": run["tasks"]["value"]["base_sha"],
+                           "blocked_by": ["__pycache__/"]}], result["local_outcome"]["preserved_worktrees"])
+        self.assertEqual(b"cached", cache.read_bytes())
+        # Preserved means untouched: no cleanup commit, the reviewed change stays staged.
+        self.assertEqual(task["base_sha"], git(Path(task["path"]), "rev-parse", "HEAD"))
+        self.assertEqual("M  value.txt", git(Path(task["path"]), "status", "--porcelain"))
+        self.assertEqual(self.original, git(self.repo, "rev-parse", "refs/heads/main"))
+        self.assertEqual(run["commit"]["head"], git(self.repo, "rev-parse", "refs/heads/" + run["integration"]["branch"]))
+        self.assertEqual(result["local_outcome"], e.status(self.root)["local_outcome"])
+        self.assertEqual(result, p.finish_local(self.root))
+
+    def test_fast_forward_still_happens_when_gate_caches_preserve_trees(self):
+        run = self.committed(self.cache_writing_plan())
+        e.authorize(self.root, "local-merge", "fixture-user", "Synthetic explicit local-merge authority.")
+        result = p.finish_local(self.root, fast_forward=True)
+        head = run["commit"]["head"]
+        self.assertEqual(("COMPLETE", True, head), (result["state"], result["local_outcome"]["fast_forwarded"], result["local_outcome"]["main_head"]))
+        self.assertEqual(head, git(self.repo, "rev-parse", "refs/heads/main"))
+        self.assertEqual("", git(self.repo, "status", "--porcelain"))
+        preserved = {item["owner"]: item for item in result["local_outcome"]["preserved_worktrees"]}
+        self.assertEqual({"value", "integration"}, set(preserved))
+        self.assertEqual(["__pycache__/"], preserved["value"]["blocked_by"])
+        self.assertEqual(["__pycache__/"], preserved["integration"]["blocked_by"])
+        self.assertEqual((run["integration"]["path"], head), (preserved["integration"]["path"], preserved["integration"]["head"]))
+        for owner in (run["tasks"]["value"], run["integration"]):
+            self.assertTrue((Path(owner["path"]) / "__pycache__" / "value_check.cpython-310.pyc").is_file())
+
+    def test_unreviewed_tracked_change_still_blocks_a_tree_with_gate_caches(self):
+        run = self.committed(self.cache_writing_plan())
+        e.authorize(self.root, "local-merge", "fixture-user", "Synthetic explicit local-merge authority.")
+        path = Path(run["tasks"]["value"]["path"])
+        (path / "value.txt").write_text("unreviewed\n")
+        self.assert_code("stale_report", p.finish_local, self.root, fast_forward=True)
+        self.assertEqual("unreviewed\n", (path / "value.txt").read_text())
+        current = e.load(self.root)
+        self.assertEqual(("READY_TO_PUBLISH", None), (current["state"], current.get("local_finish")))
+        self.assertEqual(self.original, git(self.repo, "rev-parse", "refs/heads/main"))
+        # The same change made after finishing started is caught before preservation.
+        (path / "value.txt").write_text("after\n")
+        original = p._fast_forward_main
+
+        def edit_after_preflight(run_state, intent):
+            original(run_state, intent)
+            (path / "value.txt").write_text("unreviewed\n")
+
+        with mock.patch.object(p, "_fast_forward_main", side_effect=edit_after_preflight):
+            self.assert_code("cleanup_changed", p.finish_local, self.root, fast_forward=True)
+        interrupted = e.load(self.root)
+        self.assertEqual("READY_TO_PUBLISH", interrupted["state"])
+        self.assertFalse(interrupted["cleanup"]["worktrees"]["value"].get("preserved"))
+        self.assertEqual("unreviewed\n", (path / "value.txt").read_text())
 
     def test_publication_commands_refuse_local_run_before_git_or_provider(self):
         self.committed()

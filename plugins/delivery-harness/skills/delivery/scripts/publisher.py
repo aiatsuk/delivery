@@ -581,8 +581,29 @@ def _preserve_history(run, cleanup_state):
     cleanup_state["preserved_prior_attempts"] = prior_attempts
 
 
-def _prepare_removals(run, receipts, owners, integration_head, integration_message):
-    """Verify and record every owned tree before the first removal, then persist the receipts."""
+ARTIFACTS = "Preserve ignored, untracked, and empty-directory artifacts before cleanup."
+
+
+def _artifact_paths(info, owner):
+    """Exact ignored, untracked and empty-directory artifacts that block a tree's removal."""
+    return sorted(set(info["status"]["ignored"]) | set(info["status"]["untracked"])
+                  | set(git_ops._artifact_inventory(Path(owner["path"]))))
+
+
+def _tracked_content(path, base_sha):
+    """Content fingerprint of tracked and staged files only; untracked artifacts are excluded."""
+    inventory = git_ops.inventory(path, base_sha)
+    untracked = set(inventory["untracked"])
+    return git_ops._digest({"base_sha": base_sha,
+                            "files": [record for record in inventory["content_records"] if record["path"] not in untracked]})
+
+
+def _prepare_removals(run, receipts, owners, integration_head, integration_message, *, preserve_artifacts=False):
+    """Verify and record every owned tree before the first removal, then persist the receipts.
+
+    With ``preserve_artifacts`` an artifact-only blocker is decided at removal
+    time instead: that tree is kept and reported, never cleaned or committed.
+    """
     # Verify the whole dependency graph while every task tree still
     # exists. Later exact commits/removals cannot invalidate this saved
     # cleanup evidence merely by retiring an upstream task first.
@@ -591,9 +612,8 @@ def _prepare_removals(run, receipts, owners, integration_head, integration_messa
             continue
         task_id = None if key == "integration" else key
         info = _owned(run, owner, task_id)
-        engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
-                       and not git_ops._artifact_inventory(Path(owner["path"])),
-                       "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
+        if not preserve_artifacts:
+            engine.require(not _artifact_paths(info, owner), "cleanup_artifacts", ARTIFACTS)
         if task_id:
             engine.verify_task_current(run, task_id)
             snapshot = engine.snapshot(run, task_id)
@@ -605,11 +625,16 @@ def _prepare_removals(run, receipts, owners, integration_head, integration_messa
     _checkpoint(run)
 
 
-def _remove_prepared(run, receipts, owners):
-    """Remove each prepared owned tree, recovering interrupted removals and commits."""
+def _remove_prepared(run, receipts, owners, *, preserve_artifacts=False):
+    """Remove each prepared owned tree, recovering interrupted removals and commits.
+
+    With ``preserve_artifacts`` a tree blocked only by ignored, untracked or
+    empty-directory artifacts is kept exactly as it is and its receipt lists
+    the blocking paths. Changed tracked content still blocks.
+    """
     for key, owner in owners:
         receipt = receipts.get(key)
-        if receipt and receipt.get("removed"):
+        if receipt and (receipt.get("removed") or receipt.get("preserved")):
             continue
         if receipt and not Path(owner["path"]).exists() and not Path(owner["path"]).is_symlink():
             purpose = "integration" if key == "integration" else "task-" + key
@@ -626,9 +651,8 @@ def _remove_prepared(run, receipts, owners):
             continue
         task_id = None if key == "integration" else key
         info = _owned(run, owner, task_id)
-        engine.require(not info["status"]["ignored"] and not info["status"]["untracked"]
-                       and not git_ops._artifact_inventory(Path(owner["path"])),
-                       "cleanup_artifacts", "Preserve ignored, untracked, and empty-directory artifacts before cleanup.")
+        blocked = _artifact_paths(info, owner)
+        engine.require(not blocked or preserve_artifacts, "cleanup_artifacts", ARTIFACTS)
         if info["head"] != receipt["head"] and receipt.get("commit_intent"):
             recovered = _recover_exact_commit(owner["path"], receipt["commit_intent"])
             if recovered:
@@ -637,6 +661,12 @@ def _remove_prepared(run, receipts, owners):
                 receipt["commit_recovered"] = True
                 _checkpoint(run)
         engine.require(info["head"] == receipt["head"], "cleanup_identity", "The worktree HEAD changed after cleanup was prepared.")
+        if blocked:
+            engine.require(_tracked_content(owner["path"], owner["base_sha"]) == receipt["content"],
+                           "cleanup_changed", "Reviewed content changed after cleanup was prepared.")
+            receipt.update(preserved=True, blocked_by=blocked, at=engine.now())
+            _checkpoint(run)
+            continue
         before = git_ops.inventory(owner["path"], owner["base_sha"])
         engine.require(before["content_fingerprint"] == receipt["content"], "cleanup_changed", "Reviewed content changed after cleanup was prepared.")
         if not info["status"]["clean"]:
@@ -749,7 +779,10 @@ def finish_local(root, expected_revision=None, *, fast_forward=False):
     The committed integration branch is the delivered result. Owned task trees
     are retired with the same checks and recovery as ``cleanup``. With explicit
     local-merge authority, main is fast-forwarded to the exact committed head and
-    the integration tree is retired too. Every branch is preserved.
+    the integration tree is retired too. Every branch is preserved. A tree whose
+    removal is blocked only by ignored, untracked or empty-directory artifacts
+    (for example gate caches) is kept and listed in
+    ``local_outcome.preserved_worktrees``; changed tracked content still blocks.
     """
     engine.require(type(fast_forward) is bool, "invalid_input", "fast_forward must be true or false.")
     current = engine.load(root)
@@ -792,21 +825,24 @@ def finish_local(root, expected_revision=None, *, fast_forward=False):
             owners.append(("integration", run["integration"]))
         try:
             _prepare_removals(run, cleanup_state["worktrees"], owners, intent["head"],
-                              "The committed integration worktree changed after its commit.")
+                              "The committed integration worktree changed after its commit.", preserve_artifacts=True)
             if fast_forward and intent["phase"] in {"prepared", "fast_forward_attempted"}:
                 _fast_forward_main(run, intent)
             if intent["phase"] != "retiring":
                 intent["phase"] = "retiring"
                 _checkpoint(run)
-            _remove_prepared(run, cleanup_state["worktrees"], owners)
+            _remove_prepared(run, cleanup_state["worktrees"], owners, preserve_artifacts=True)
             if not fast_forward:
                 _committed(run)
             main_head = git_ops._ref_sha(Path(run["primary"]), "refs/heads/main")
             if fast_forward:
                 engine.require(main_head == intent["head"], "main_moved", "Main no longer equals the fast-forwarded integration head.")
             cleanup_state["primary_head"] = main_head
+            preserved = [{"owner": key, "path": receipt["path"], "branch": receipt["branch"], "head": receipt["head"],
+                          "blocked_by": receipt["blocked_by"]}
+                         for key, receipt in cleanup_state["worktrees"].items() if receipt.get("preserved")]
             run["local_outcome"] = {"branch": intent["branch"], "head": intent["head"], "fast_forwarded": fast_forward,
-                                    "main_head": main_head, "at": engine.now()}
+                                    "main_head": main_head, "preserved_worktrees": preserved, "at": engine.now()}
             if run.get("product"):
                 import product
                 context = run["product"]
