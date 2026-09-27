@@ -203,7 +203,7 @@ class JournalImportTests(ControlFixture):
             linked.path.unlink()
             linked.path.symlink_to(Journal(elsewhere).path)
             (linked.dir / f"agent-{IMPLEMENTER}.jsonl").write_text("{}\n")
-            self.assert_code("journal_symlink", e.import_task_report, self.root, "value", search_root=root)
+            self.assert_code("journal_result_missing", e.import_task_report, self.root, "value", search_root=root)
             self.assert_code("journal_symlink", e.import_task_report, self.root, "value", journal=linked.path)
         current = e.load(self.root)["tasks"]["value"]
         self.assertEqual(("DISPATCHED", "workflow-pending"), (current["status"], current["agent"]["actor"]))
@@ -321,12 +321,27 @@ class TriageTests(ControlFixture):
         self.assertEqual(("BLOCKED", "requirements_finding", 0), (blocked["state"], blocked["blocker"]["code"], blocked["tasks"]["value"].get("rework_rounds", 0)))
         self.assertEqual("A requirements finding needs revise and renewed approval, not implementer rework: The acceptance text contradicts the requirement.", blocked["blocker"]["reason"])
         self.assertEqual("requirements", blocked["tasks"]["value"]["rework_history"][-1]["decision"])
-        e.resume(self.root, "Synthetic: the fixture user answered the requirement question.")
-        self.redispatch("synthetic:after-requirements")
+        self.assert_code("revision_required", e.resume, self.root, "Synthetic: the fixture user answered the requirement question.")
+        self.assertEqual("BLOCKED", e.load(self.root)["state"])
+
+    def test_human_decision_blocks_and_resume_continues(self):
+        self.begin()
+        self.implement()
         blocked = e.rework(self.root, "value", "Keep or drop the legacy value.", decision="human")
         self.assertEqual(("BLOCKED", "human_decision", "A human decision is required: Keep or drop the legacy value."),
                          (blocked["state"], blocked["blocker"]["code"], blocked["blocker"]["reason"]))
         self.assertEqual("human_decision", e.status(self.root)["blocker_code"])
+        e.resume(self.root, "Synthetic: the fixture user decided to keep the legacy value.")
+        self.redispatch("synthetic:after-decision")
+
+    def test_journal_identity_prefixes_are_reserved_for_imports(self):
+        self.begin()
+        e.prepare_task(self.root, "value")
+        for actor in ("workflow-agent:wf_x-1/a0typed", "workflow-pending"):
+            with self.subTest(actor=actor):
+                self.assert_code("reserved_actor", e.register_agent, self.root, "value", actor, "unit-test", "synthetic:typed")
+        self.assertEqual("PREPARED", e.load(self.root)["tasks"]["value"]["status"])
+        self.assert_code("reserved_actor", e.review, self.root, "workflow-agent:wf_x-1/a0typed", "PASS", PASS_EVIDENCE, task_id="value")
 
     def test_repeated_finding_key_blocks_as_non_converging(self):
         self.begin()
@@ -465,9 +480,7 @@ class WorkflowJournalTests(unittest.TestCase):
         workflows = self.home / "linked" / "fixture-project" / "fixture-session" / "subagents" / "workflows"
         workflows.mkdir(parents=True)
         (workflows / RUN_ID).symlink_to(real.dir, target_is_directory=True)
-        with self.assertRaises(e.RunError) as caught:
-            wj.find_results(lambda result: True, search_root=self.home / "linked")
-        self.assertEqual("journal_symlink", caught.exception.code)
+        self.assertEqual([], wj.find_results(lambda result: True, search_root=self.home / "linked"))
         with self.assertRaises(e.RunError) as caught:
             wj.find_results(lambda result: True, journal=workflows / RUN_ID / "journal.jsonl")
         self.assertEqual("journal_symlink", caught.exception.code)
