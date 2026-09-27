@@ -7,7 +7,8 @@ not the coordinator, supplies the agent identity. A result counts only after an 
 ``started`` line for the same key and agent, and only while its transcript exists.
 
 This is provenance, not authentication: anyone who can write under the search root can
-forge a journal. Symlinked journals and journal directories are refused.
+forge a journal. An explicitly named journal behind a symlink is refused; a search skips
+symlinked paths.
 """
 from __future__ import annotations
 
@@ -36,6 +37,15 @@ def _refuse_symlinks(path: Path, stop: Path) -> None:
         current = current.parent
 
 
+def _has_symlink(path: Path, stop: Path) -> bool:
+    current = path
+    while current != stop and current != current.parent:
+        if current.is_symlink():
+            return True
+        current = current.parent
+    return False
+
+
 def _journals(journal, search_root) -> list[Path]:
     e = _engine()
     if journal is not None:
@@ -45,10 +55,9 @@ def _journals(journal, search_root) -> list[Path]:
         return [path.resolve()]
     root = Path(search_root or DEFAULT_SEARCH_ROOT).expanduser().resolve()
     e.require(root.is_dir(), "journal_missing", "The workflow journal search root is not a directory.")
-    paths = sorted(root.glob(PATTERN))
-    for path in paths:
-        _refuse_symlinks(path, root)
-    return paths
+    # A search never follows a symlinked project, session, run directory or journal: such
+    # paths are skipped, so they can neither supply a result nor break unrelated imports.
+    return [path for path in sorted(root.glob(PATTERN)) if not _has_symlink(path, root)]
 
 
 def _scan(path: Path, match: Callable[[dict], Any]) -> list[dict]:

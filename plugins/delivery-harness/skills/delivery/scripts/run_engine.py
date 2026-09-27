@@ -708,7 +708,15 @@ def _pre_dispatch_content(owner: dict, snap: dict) -> None:
         require(snap["content"] == failing["content"], "pre_dispatch_changes", "The task worktree changed after the failing result that started this rework round and before the new dispatch; preserve it and find out who wrote it.")
 
 
+def _typed_actor(actor, label: str) -> str:
+    actor = text(actor, label)
+    require(not actor.startswith(("workflow-agent:", "workflow-pending")), "reserved_actor", "Identities starting with workflow-agent: or workflow-pending are reserved for workflow-journal imports; register a workflow dispatch with --via-workflow.")
+    return actor
+
+
 def register_agent(root, task_id: str, actor: str | None = None, host: str | None = None, handle: str | None = None, expected_revision=None, *, via_workflow=False) -> dict:
+    if not via_workflow and actor is not None:
+        _typed_actor(actor, "Agent identity")
     with transaction(root, "agent_registered", expected_revision) as run:
         _implementation_state(run)
         owner = run["tasks"].get(task_id)
@@ -1066,7 +1074,7 @@ def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, 
 
 def review(root, actor: str, verdict: str, evidence: str, *, task_id: str | None = None, expected_revision=None, decision="code-fix", finding_keys=None) -> dict:
     require(verdict in {"PASS", "FAIL"}, "invalid_verdict", "Review verdict is PASS or FAIL.")
-    actor = text(actor, "Reviewer identity")
+    actor = _typed_actor(actor, "Reviewer identity")
     decision, finding_keys = triage(decision, finding_keys)
     review_evidence(verdict, evidence)
     with transaction(root, "independent_review_recorded", expected_revision) as run:
@@ -1284,7 +1292,7 @@ def register_fix(root, actor: str, host: str, handle: str, reason: str, expected
         owned_worktree_record(run, run["integration"])
         previous = run.get("integration_fix")
         require(not previous or previous["status"] == "REPORTED", "fix_dispatch_active", "Query and collect the current integration dispatch before starting another.")
-        fields = {"actor": text(actor, "Implementation actor"), "host": text(host, "Host"), "handle": text(handle, "Actual spawn handle"), "registered_at": now()}
+        fields = {"actor": _typed_actor(actor, "Implementation actor"), "host": text(host, "Host"), "handle": text(handle, "Actual spawn handle"), "registered_at": now()}
         require(not any(t.get("status") == "DISPATCHED" for t in run["tasks"].values()), "active_task", "Collect active task workers before editing their integrated result.")
         attempt = 1 if not previous else previous["attempt"] + 1
         limit = fix_budget(run)["limit"]
@@ -1327,6 +1335,7 @@ def block(root, reason: str, expected_revision=None) -> dict:
 def resume(root, resolution: str, expected_revision=None) -> dict:
     with transaction(root, "resumed", expected_revision) as run:
         require(run["state"] == "BLOCKED" and run["blocker"], "not_blocked", "No blocker is recorded.")
+        require(run["blocker"].get("code") != "requirements_finding", "revision_required", "A requirements finding is resolved by revise and renewed approval, not by resume.")
         text(resolution, "Observed blocker resolution")
         run["state"] = run["blocker"]["from"]
         run["blocker"] = None
