@@ -41,6 +41,16 @@ def validate(root):
     for path in root.rglob("*.json"):
         try: json.loads(path.read_text())
         except (ValueError, UnicodeError) as error: errors.append(f"{path.relative_to(root)}: {error}")
+    claude = manifests[1] if len(manifests) > 1 else {}
+    if claude.get("workflows") != "./skills/delivery/workflows/": errors.append(".claude-plugin/plugin.json: workflows must point to ./skills/delivery/workflows/")
+    workflows = sorted((root / "skills/delivery/workflows").glob("*.js"))
+    if [p.stem for p in workflows] != ["delivery-implement", "delivery-review"]: errors.append(f"Unexpected workflow set: {[p.name for p in workflows]}")
+    for path in workflows:
+        source = path.read_text()
+        if not source.startswith("export const meta = {") or f"name: '{path.stem}'," not in source.split("\n}\n", 1)[0]:
+            errors.append(f"{path.name}: must start with a literal meta block named after the file")
+        if re.search(r"\bimport\s*\(|\bDate\.now\(|\bMath\.random\(|\bnew Date\(\)", source):
+            errors.append(f"{path.name}: module loading and nondeterministic calls are not allowed in workflows")
     for path in (root / "skills").rglob("*.py"):
         source = path.read_text()
         if re.search(r"(?:/Users/[^/\s]+/|/private/tmp/delivery-harness-build|/\.codex/plugins/cache/)", source):
