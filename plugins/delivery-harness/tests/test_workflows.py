@@ -22,7 +22,11 @@ def implement_args(*tasks):
 
 
 def report(dispatch):
-    return {"dispatch_id": dispatch, "summary": "changed", "tests": [{"command": ["python3", "-m", "unittest"], "exit_code": 0, "outcome": "3 passed"}], "limitations": []}
+    return {"dispatch_id": dispatch, "summary": "changed", "tests": [{"command": ["python3", "-m", "unittest"], "exit_code": 0, "outcome": "3 passed"}], "limitations": [], "tree": "abc123"}
+
+
+EVIDENCE = ("acceptance t1 works: observed the new value path in src/t1.py and its unit test asserting the exact text\n"
+            "gate python3 -m unittest: exit 0, 3 tests passed, including the new regression case for the value")
 
 
 def review_args(*lenses, task="t1"):
@@ -33,7 +37,7 @@ def review_args(*lenses, task="t1"):
 
 
 def verdict(token, value="PASS"):
-    return {"review_token": token, "verdict": value, "evidence": "acceptance: observed\ngate: exit 0", "defects": []}
+    return {"review_token": token, "verdict": value, "evidence": EVIDENCE, "defects": []}
 
 
 @unittest.skipUnless(NODE, "node is required to run workflow scripts")
@@ -56,7 +60,8 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(set(calls), {"implement:t1", "implement:t2"})
         self.assertIn("dispatch_id must be exactly d-t1", calls["implement:t1"]["prompt"])
         self.assertIn("You are not alone in this repository", calls["implement:t1"]["prompt"])
-        self.assertEqual(calls["implement:t1"]["schema"]["required"], ["dispatch_id", "summary", "tests", "limitations"])
+        self.assertEqual(calls["implement:t1"]["schema"]["required"], ["dispatch_id", "summary", "tests", "limitations", "tree"])
+        self.assertEqual(calls["implement:t1"]["schema"]["properties"]["tests"]["items"]["properties"]["command"]["minItems"], 1)
         self.assertNotIn("model", {k for c in out["calls"] for k, v in c.items() if v is not None and k == "model"})
         self.assertEqual([t["returned"] for t in out["result"]["tasks"]], [True, True])
 
@@ -72,6 +77,25 @@ class WorkflowScriptTests(unittest.TestCase):
         value["tasks"][0]["model"] = "opus"
         out = self.run_flow("delivery-implement", value, {"implement:t1": [report("d-t1")]})
         self.assertEqual(out["calls"][0]["model"], "opus")
+
+    def test_contract_gate_objects_are_accepted_and_only_safe_ones_listed(self):
+        value = implement_args("t1")
+        value["tasks"][0]["gates"] = [{"command": ["python3", "-m", "unittest"], "risk": "safe", "oracle": "o", "cleanup": "c"},
+                                      {"command": ["deploy-preview"], "risk": "external", "oracle": "o", "cleanup": "c"}]
+        out = self.run_flow("delivery-implement", value, {"implement:t1": [report("d-t1")]})
+        prompt = out["calls"][0]["prompt"]
+        self.assertIn('"python3" "-m" "unittest"', prompt)
+        self.assertNotIn("deploy-preview", prompt)
+        self.assertIn("Do not run the 1 other planned gate(s)", prompt)
+        review = review_args("conformance")
+        review["targets"][0]["gates"] = value["tasks"][0]["gates"]
+        out = self.run_flow("delivery-review", review, {"review:t1:conformance": [verdict("review-conformance")]})
+        self.assertNotIn("deploy-preview", out["calls"][0]["prompt"])
+
+    def test_review_schema_requires_the_evidence_minimum(self):
+        out = self.run_flow("delivery-review", review_args("conformance"), {"review:t1:conformance": [verdict("review-conformance")]})
+        self.assertEqual(out["calls"][0]["schema"]["properties"]["evidence"]["minLength"], 160)
+        self.assertIn("at least two such lines and 160 characters", out["calls"][0]["prompt"])
 
     def test_review_runs_one_agent_per_lens_with_its_token(self):
         out = self.run_flow("delivery-review", review_args("conformance", "adversary"),
