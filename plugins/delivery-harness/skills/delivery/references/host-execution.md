@@ -36,6 +36,12 @@ background server/device session holding a resource after the command returns.
 Use explicit cleanup and host session ownership for those resources. The CLI
 tracks its runner and direct children, not every detached descendant.
 
+Gate commands execute as exact argument arrays, without an implicit shell. For
+an intentional pipeline, declare Bash and pipefail explicitly, for example
+`["bash", "-o", "pipefail", "-c", "false | cat"]`. This gate must fail even though
+the final pipeline command succeeds; shell syntax in an ordinary argument is
+not interpreted.
+
 ## Claude Code
 
 Use the available native Agent/subagent facility with the same ownership and
@@ -43,6 +49,11 @@ report contract. Do not require a second orchestration plugin. Keep configured
 models unless explicitly selected by the user. If the host cannot resume a prior
 handle, record its observed absence, preserve the worktree, and register a fresh
 dispatch for an authorized retry. Never reuse a prior report as its new result.
+
+Claude Code Bash tool permissions do not enforce a read-only filesystem. A
+reviewer label or restricted tool list is not that boundary: use actual host
+filesystem enforcement where available and inspect repository state before and
+after review to detect unexpected writes. Report any enforcement limitation.
 
 ## Dispatch brief
 

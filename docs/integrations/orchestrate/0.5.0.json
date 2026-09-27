@@ -1,0 +1,34 @@
+{
+  "source_revision": "225818ce57741831f9c224f1d03d247b9d6fce7e",
+  "disposition": "integrated",
+  "rationale": "Selective 0.5.0 adoption: retain exact argv execution, exclusive temporary gate logs, file-keyed occurrence-count analyzer deltas, both-side rename scope, and transactional untracked/ignored collision protection already implemented in Delivery. Add explicit Bash pipefail and orphan-log/rename regressions and document Claude filesystem-enforcement limits. Upstream installers, model pins and broad staging/cleanup remain excluded. No runtime code or other source pins changed.",
+  "reviewer": "Independent source-integration review on September 27, 2026 returned PASS after inspecting the complete upstream delta, Delivery diff and safety mappings; see docs/integrations/orchestrate/0.5.0-validation.md. Review prose does not authenticate identity.",
+  "tests": "Independent run: 71 tests passed across test_orchestrate_update, test_git_ops and test_gate_jobs, plus a literal-argv execution probe and diff whitespace check. Full repository and package evidence is recorded separately in 0.5.0-validation.md; focused reruns are not added to full-suite counts.",
+  "upstream_paths": [
+    "CHANGELOG.md",
+    "README.md",
+    "VERSION",
+    "install.sh",
+    "skill/SKILL.md",
+    "skill/references/harness-claude.md",
+    "skill/scripts/gate.py",
+    "skill/scripts/integrate.sh",
+    "tests/test_gate.py",
+    "tests/test_reliability.py"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md"
+  ]
+}

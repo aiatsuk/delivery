@@ -244,6 +244,27 @@ class GitSafetyTests(unittest.TestCase):
         self.assertEqual((integrated / ":(glob)payload.txt").read_text(), "literal\n")
         self.assertEqual(result["staged"], exported["files"])
 
+    def test_rename_requires_source_and_destination_in_export_scope(self):
+        root = self.task()
+        self.command(root, "mv", "--", "one.txt", "renamed.txt")
+        before = git.inventory(root, self.base)
+        index_path = Path(self.command(root, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
+        index_before = index_path.read_bytes()
+        output = self.folder / "rename.diff"
+        self.assert_code("OUT_OF_SCOPE", git.export_patch, root, output, ["renamed.txt"])
+        self.assertFalse(output.exists())
+        self.assertEqual(index_path.read_bytes(), index_before)
+        self.assertEqual(git.inventory(root, self.base)["fingerprint"], before["fingerprint"])
+        self.assertFalse((root / "one.txt").exists())
+        self.assertEqual((root / "renamed.txt").read_bytes(), b"one\n")
+        exported = git.export_patch(root, output, ["one.txt", "renamed.txt"])
+        self.assertEqual(exported["files"], ["one.txt", "renamed.txt"])
+        integrated = self.task("rename-integration")
+        result = git.integrate_patches(integrated, [exported], self.base)
+        self.assertEqual(result["staged"], ["one.txt", "renamed.txt"])
+        self.assertFalse((integrated / "one.txt").exists())
+        self.assertEqual((integrated / "renamed.txt").read_bytes(), b"one\n")
+
     def test_dependency_logs_never_enter_reviewed_patch(self):
         root = self.task()
         self.write(root, "one.txt", "reviewed\n")
