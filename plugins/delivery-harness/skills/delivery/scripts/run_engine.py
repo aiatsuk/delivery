@@ -123,8 +123,9 @@ def transaction(root: str | Path, event: str, expected_revision: int | None = No
         atomic_json(root / "run.json", value)
 
 
-def create(repo: str, run_id: str, request: str, *, store: str | None = None, product_root: str | None = None, work_item: str | None = None) -> dict:
+def create(repo: str, run_id: str, request: str, *, store: str | None = None, product_root: str | None = None, work_item: str | None = None, delivery_mode: str = "github") -> dict:
     run_id, request = identifier(run_id), text(request, "Original user request")
+    require(delivery_mode in {"github", "local"}, "invalid_delivery_mode", "Use the github delivery mode or the explicit local-only mode.")
     primary = Path(git_ops.canonical_repo(repo)).resolve()
     home = Path(store or os.environ.get("DELIVERY_HOME", "~/.local/state/delivery-harness")).expanduser().resolve()
     checkouts = [Path(item["worktree"]).resolve() for item in git_ops._worktrees(primary)]
@@ -149,7 +150,7 @@ def create(repo: str, run_id: str, request: str, *, store: str | None = None, pr
              "product": context, "plan": None, "plan_hash": None, "spec_version": 0,
              "approval": None, "authorizations": {}, "tasks": {}, "integration": None,
              "gates": [], "reviews": [], "history": [], "blocker": None, "pr": None,
-             "spec_root": str(root / "spec"), "check_root": str(root / "check")}
+             "spec_root": str(root / "spec"), "check_root": str(root / "check"), "delivery_mode": delivery_mode}
     atomic_json(root / "run.json", value)
     return value
 
@@ -281,12 +282,20 @@ def _test_targets(run: dict, scope: str) -> dict:
     return values
 
 
-def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None) -> dict:
-    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None) -> dict:
+    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+    if scope == "fix-budget":
+        require(type(count) is int and 1 <= count <= 3, "invalid_fix_budget", "A fix-budget extension needs an explicit integer count from 1 to 3.")
+    else:
+        require(count is None, "invalid_authorization_count", "Only fix-budget authority takes a count.")
     with transaction(root, "authority_recorded", expected_revision) as run:
         assert_plan(run)
         if scope == "merge":
             require(run.get("pr"), "missing_pr", "Merge authority must name an existing run PR.")
+        if scope == "local-merge":
+            require(run.get("delivery_mode", "github") == "local", "local_merge_scope", "Local-merge authority applies only to a local-only run; GitHub runs merge through their PR.")
+        if scope == "fix-budget":
+            require(run["state"] in {"VERIFYING", "READY_TO_PUBLISH", "PR_OPEN"}, "fix_budget_state", "Extend the integration-fix budget only for an existing unmerged integration.")
         grant = {**attestation(actor, evidence), "plan_hash": run["plan_hash"], "scope": scope}
         if scope.startswith("test-"):
             require(isinstance(targets, list) and targets and all(isinstance(target, str) for target in targets), "authorization_targets_required", "Name the explicitly authorized task gates or integrated cases; use ['*'] only for explicit approval of all matching-risk gates.")
@@ -299,7 +308,12 @@ def authorize(root, scope: str, actor: str, evidence: str, expected_revision=Non
             require(targets is None, "invalid_authorization_target", "Gate targets apply only to test authority.")
         if scope == "merge":
             grant["pr"] = run["pr"]["number"]
-        run["authorizations"][scope] = grant
+        if scope == "fix-budget":
+            # Append-only: each explicit extension stays auditable and counts
+            # only while its plan hash is the current plan's.
+            run.setdefault("fix_budget_grants", []).append({**grant, "count": count, "spec_version": run["spec_version"]})
+        else:
+            run["authorizations"][scope] = grant
     return load(root)
 
 
@@ -366,7 +380,10 @@ def start(root, *, within_request=False, expected_revision=None) -> dict:
         if not quick:
             require(run.get("approval", {}).get("plan_hash") == run["plan_hash"], "stale_approval", "Semantic approval is stale.")
         assert_spec(run, starting=True)
-        primary = git_ops.prepare_primary(run["primary"])
+        if run.get("delivery_mode", "github") == "local":
+            primary = git_ops.prepare_local_primary(run["primary"])
+        else:
+            primary = git_ops.prepare_primary(run["primary"])
         run["base_sha"] = primary["base_sha"]
         if run["plan"]["classification"]["level"] != "small":
             current = spec_command(root, ["status"])
@@ -1002,6 +1019,20 @@ def invalidate_integration(run: dict, reason: str) -> None:
     run["spec_refresh_required"] = run["plan"]["classification"]["level"] != "small"
 
 
+def fix_budget(run: dict) -> dict:
+    """Integration-fix rounds used by the current integration and the explicit limit.
+
+    The base limit is two rounds. Each fix-budget grant bound to the current plan
+    hash and specification version adds its count; grants recorded for another
+    plan, or for an identical plan approved again after a revision, do not count.
+    """
+    used = (run.get("integration_fix") or {}).get("attempt", 0)
+    current = run.get("plan_hash")
+    extra = sum(grant["count"] for grant in run.get("fix_budget_grants", [])
+                if current and grant.get("plan_hash") == current and grant.get("spec_version") == run.get("spec_version"))
+    return {"used": used, "limit": 2 + extra}
+
+
 def register_fix(root, actor: str, host: str, handle: str, reason: str, expected_revision=None) -> dict:
     """Record a real same-scope integration/PR correction dispatch."""
     with transaction(root, "integration_fix_dispatched", expected_revision) as run:
@@ -1009,6 +1040,7 @@ def register_fix(root, actor: str, host: str, handle: str, reason: str, expected
         assert_plan(run)
         need_authority(run, "implement")
         require(run["state"] in {"VERIFYING", "READY_TO_PUBLISH", "PR_OPEN"}, "fix_state", "Fix only an existing unmerged integration within the approved scope.")
+        require((run.get("local_finish") or {}).get("phase", "prepared") == "prepared", "local_finish_started", "finish-local already started changing main or retiring worktrees; retry finish-local instead of reopening the integration.")
         require(run.get("integration"), "missing_worktree", "No integration branch exists.")
         owned_worktree_record(run, run["integration"])
         previous = run.get("integration_fix")
@@ -1016,7 +1048,8 @@ def register_fix(root, actor: str, host: str, handle: str, reason: str, expected
         fields = {"actor": text(actor, "Implementation actor"), "host": text(host, "Host"), "handle": text(handle, "Actual spawn handle"), "registered_at": now()}
         require(not any(t.get("status") == "DISPATCHED" for t in run["tasks"].values()), "active_task", "Collect active task workers before editing their integrated result.")
         attempt = 1 if not previous else previous["attempt"] + 1
-        require(attempt <= 2, "rework_budget", "Two integrated rework rounds are exhausted; reassess the plan or request explicit escalation.")
+        limit = fix_budget(run)["limit"]
+        require(attempt <= limit, "rework_budget", f"The integration-fix budget of {limit} rounds is exhausted; reassess the plan or record an explicit extension with authorize --scope fix-budget --count N.")
         dispatch_id = digest({**fields, "revision": run["revision"], "run": run["id"]})
         if previous:
             run.setdefault("integration_fix_history", []).append(previous)
@@ -1119,6 +1152,9 @@ def status(root) -> dict:
     result["authority_scopes"] = {scope: {"actor": grant["actor"], "targets": list(grant.get("targets", {})), "pr": grant.get("pr")} for scope, grant in run["authorizations"].items()}
     result["retained_versions"] = len(run.get("previous_versions", []))
     result["gate_jobs"] = {key: {"status": job["status"], "task": job.get("task"), "case": job.get("case"), "resources": job.get("resources", [])} for key, job in run.get("gate_jobs", {}).items()}
+    result["delivery_mode"] = run.get("delivery_mode", "github")
+    result["local_outcome"] = run.get("local_outcome")
+    result["fix_budget"] = fix_budget(run)
     result["next_action"] = {
         "DISCOVERY": "Load explicit product/repository context, classify risk and write the plan.",
         "READY_FOR_APPROVAL": "Present material decisions and obtain semantic approval; Small work may use scoped request authority.",
@@ -1131,6 +1167,8 @@ def status(root) -> dict:
         "COMPLETE": "Use the durable product note and linked evidence to resume future work.",
         "BLOCKED": "Resolve the recorded blocker without bypassing it.",
     }.get(run["state"], "Inspect the run history.")
+    if result["delivery_mode"] == "local" and run["state"] == "READY_TO_PUBLISH":
+        result["next_action"] = "Local-only run: commit, then finish-local (add --fast-forward-main with local-merge authority to update main)."
     try:
         if run.get("plan"):
             assert_plan(run)

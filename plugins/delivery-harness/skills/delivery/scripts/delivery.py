@@ -30,11 +30,12 @@ def parser():
     new.add_argument("--store")
     new.add_argument("--product")
     new.add_argument("--work-item")
+    new.add_argument("--local-only", action="store_true", help="Deliver to a committed local branch; no remote, PR, or provider.")
     listing = sub.add_parser("list", help="Find runs by canonical repository identity.")
     listing.add_argument("--repo", required=True)
     listing.add_argument("--store")
     sub.add_parser("doctor", help="Check local capabilities without network or installation changes.")
-    for name in ("plan", "approve", "authorize", "start", "status", "task-prepare", "task-register", "task-report", "task-rework", "fix-register", "fix-report", "gate", "gate-recover", "review", "integrate", "ready", "capture-verification", "commit", "publish", "refresh", "merge", "cleanup", "block", "resume", "revise"):
+    for name in ("plan", "approve", "authorize", "start", "status", "task-prepare", "task-register", "task-report", "task-rework", "fix-register", "fix-report", "gate", "gate-recover", "review", "integrate", "ready", "capture-verification", "commit", "publish", "refresh", "merge", "cleanup", "finish-local", "block", "resume", "revise"):
         q = sub.add_parser(name)
         q.add_argument("--run", required=True)
         if name != "status":
@@ -45,8 +46,9 @@ def parser():
             q.add_argument("--actor", required=True)
             q.add_argument("--evidence-file", required=True)
         if name == "authorize":
-            q.add_argument("--scope", required=True, choices=["implement", "publish", "merge", "test-external", "test-destructive"])
+            q.add_argument("--scope", required=True, choices=["implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget"])
             q.add_argument("--target", action="append", dest="targets", help="Exact task:index or case ID; repeat for each approved side-effect gate.")
+            q.add_argument("--count", type=int, help="Extra integration-fix rounds (1-3) for --scope fix-budget.")
         if name == "start":
             q.add_argument("--within-request", action="store_true")
         if name.startswith("task-"):
@@ -60,6 +62,8 @@ def parser():
             q.add_argument("--reason", required=True)
         if name == "commit":
             q.add_argument("--message-file", required=True)
+        if name == "finish-local":
+            q.add_argument("--fast-forward-main", action="store_true", help="Fast-forward local main to the committed head; needs local-merge authority.")
         if name == "publish":
             q.add_argument("--title", required=True)
             q.add_argument("--body-file", required=True)
@@ -98,7 +102,8 @@ def dispatch(a):
             raise engine.RunError("product_command", process.stderr or process.stdout)
         return json.loads(process.stdout)
     if a.command == "new":
-        return engine.create(a.repo, a.id, read_text(a.request_file), store=a.store, product_root=a.product, work_item=a.work_item)
+        return engine.create(a.repo, a.id, read_text(a.request_file), store=a.store, product_root=a.product, work_item=a.work_item,
+                             delivery_mode="local" if a.local_only else "github")
     if a.command == "list":
         import hashlib
         import os
@@ -112,7 +117,7 @@ def dispatch(a):
     revision = getattr(a, "expected_revision", None)
     if a.command == "status": return engine.status(a.run)
     if a.command == "plan": return engine.set_plan(a.run, read_json(a.file), revision)
-    if a.command == "authorize": return engine.authorize(a.run, a.scope, a.actor, read_text(a.evidence_file), revision, targets=a.targets)
+    if a.command == "authorize": return engine.authorize(a.run, a.scope, a.actor, read_text(a.evidence_file), revision, targets=a.targets, count=a.count)
     if a.command == "approve": return engine.approve(a.run, a.actor, read_text(a.evidence_file), revision)
     if a.command == "start": return engine.start(a.run, within_request=a.within_request, expected_revision=revision)
     if a.command == "task-prepare": return engine.prepare_task(a.run, a.task, revision)
@@ -127,9 +132,10 @@ def dispatch(a):
     if a.command == "integrate": return engine.integrate(a.run, revision)
     if a.command == "ready": return engine.ready(a.run, revision)
     if a.command == "capture-verification": return engine.capture_verification(a.run, a.reason, revision)
-    if a.command in {"commit", "publish", "refresh", "merge", "cleanup"}:
+    if a.command in {"commit", "publish", "refresh", "merge", "cleanup", "finish-local"}:
         import publisher
         if a.command == "commit": return publisher.commit(a.run, read_text(a.message_file), revision)
+        if a.command == "finish-local": return publisher.finish_local(a.run, revision, fast_forward=a.fast_forward_main)
         if a.command == "publish": return publisher.publish(a.run, a.title, read_text(a.body_file), revision)
         return getattr(publisher, a.command)(a.run, revision)
     if a.command == "block": return engine.block(a.run, a.reason, revision)
