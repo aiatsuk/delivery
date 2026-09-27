@@ -55,6 +55,39 @@ class AnalyzerTests(unittest.TestCase):
 
 
 class GateReliabilityTests(RunFixture):
+    def test_explicit_bash_pipefail_records_pipeline_outcomes(self):
+        value = plan()
+        commands = [["bash", "-o", "pipefail", "-c", pipeline]
+                    for pipeline in ("false | cat", "printf 'pipeline passed\\n' | cat")]
+        value["tasks"][0]["gates"] = [gate(command) for command in commands]
+        self.begin(value)
+        self.implement()
+        failed = e.execute_gate(self.root, task_id="value", gate_index=0)
+        passed = e.execute_gate(self.root, task_id="value", gate_index=1)
+        self.assertFalse(failed["passed"])
+        self.assertEqual(failed["exit_code"], 1)
+        self.assertEqual(failed["command"], commands[0])
+        self.assertTrue(passed["passed"])
+        self.assertEqual(passed["exit_code"], 0)
+        self.assertEqual(passed["command"], commands[1])
+        self.assertIn("pipeline passed\n", Path(passed["log"]).read_text())
+        self.assertEqual(e.load(self.root)["gates"][-2:], [failed, passed])
+
+    def test_orphaned_partial_gate_log_survives_new_attempt(self):
+        self.begin()
+        self.implement()
+        evidence = self.root / "evidence"
+        evidence.mkdir(exist_ok=True)
+        orphan = evidence / "gate-1.log"
+        partial = b"Delivery gate attempt 1/1\nInterrupted output without a receipt\x00"
+        orphan.write_bytes(partial)
+        self.assertEqual(e.load(self.root)["gates"], [])
+        receipt = e.execute_gate(self.root, task_id="value")
+        self.assertTrue(receipt["passed"])
+        self.assertNotEqual(Path(receipt["log"]), orphan)
+        self.assertEqual(orphan.read_bytes(), partial)
+        self.assertEqual(e.load(self.root)["gates"], [receipt])
+
     def test_signal_is_failed_receipt_with_observed_outcome(self):
         value = plan()
         value["tasks"][0]["gates"] = [gate([sys.executable, "-B", "-c", "import os,signal; os.kill(os.getpid(),signal.SIGTERM)"])]

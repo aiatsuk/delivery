@@ -44,7 +44,7 @@ left untouched; do not invoke them as additional top-level coordinators inside a
 Delivery Harness run. Their useful mechanisms are shipped as internal modules and
 one precedence contract. Configured models are inherited, never secretly pinned.
 
-The Orchestrate integration now reflects upstream 0.4.1; see the selective-update
+The Orchestrate integration now reflects upstream 0.5.0; see the selective-update
 mapping in [provenance](PROVENANCE.md). Upstream plugins can be updated independently,
 but this vendored bundle adopts changes only through explicit review, testing and
 reinstallation. It does not automatically load newer upstream code.

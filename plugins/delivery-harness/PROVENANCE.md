@@ -11,7 +11,7 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 | spec-driven-development | 1.0.0 | Specification/check engine, templates, technical references and regressions; exact source hashes in its engine guide |
 | product-driven-development | 0.5.0 | Markdown model and bounded session evidence helper/tests; provenance in internal/product |
 | ai-factory | 1.0.1 | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
-| orchestrate | 0.4.1 (6117a3461c15282949cecbea2c1f62d5d3967099) | Dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
+| orchestrate | 0.5.0 (225818ce57741831f9c224f1d03d247b9d6fce7e) | Dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
 
 No license file was present in the inspected spec/product/factory repositories. No
@@ -20,9 +20,9 @@ does not assert a blanket license for material without a supplied license notice
 Names here identify source workflows and supported hosts, not repository authorship.
 
 The public spec/product/factory pins match the source skill trees previously used
-for the integration byte-for-byte. The Orchestrate pin is the already inspected
-0.4.1 revision. Initial submodule adoption therefore does not replace runtime
-implementations or imply adoption of later upstream updates.
+for the integration byte-for-byte. Orchestrate is selectively reviewed through
+0.5.0 as described below. Source pins alone do not replace runtime implementations
+or imply adoption of later upstream updates.
 
 ## Explicit conflict resolutions
 
@@ -71,3 +71,25 @@ Version 0.4.1 adds evaluation evidence; its runtime fixes are from 0.4.0.
 
 This is a selective, tested integration, not automatic tracking of upstream or a
 claim that every original command/installer is included.
+
+## Orchestrate 0.5.0 integration
+
+Compared 6117a3461c15282949cecbea2c1f62d5d3967099 through
+225818ce57741831f9c224f1d03d247b9d6fce7e. Existing runtime protections are retained:
+
+- Commands execute exact argument arrays without an implicit shell. Intentional
+  Bash pipelines must explicitly request `-o pipefail`; the host reference and
+  regressions cover failing and successful pipelines without rewriting commands.
+- Exclusive temporary log creation preserves prior attempts, including partial
+  evidence left by an interrupted attempt.
+- Analyzer deltas already key by diagnostic and file and count repeated occurrences.
+- Rename scope includes both source and destination through `--no-renames`;
+  destination-only authorization cannot conceal an out-of-scope deletion.
+- Transactional integration already refuses untracked and ignored-file collisions.
+- Claude tool restrictions alone do not enforce a read-only filesystem. The host
+  reference distinguishes permissions, filesystem enforcement and content checks.
+- Upstream installer/uninstaller changes remain inapplicable: no upstream installer
+  is shipped or executed. Model pins and broad cleanup remain excluded.
+
+The release contract and runtime code are unchanged, so the plug-in retains 1.1.0.
+The source review record binds this update to its inspected commit and mapped files.
