@@ -32,9 +32,17 @@ TERMINAL = {"COMPLETE", "CANCELLED"}
 LEVELS = {"small": 0, "medium": 1, "large": 2}
 DECISIONS = ("code-fix", "test-plan", "environment", "requirements", "human")
 PLACEHOLDER_EVENTS = {"agent_registered", "task_registered", "registered", "dispatch", "dispatched", "none", "null", "n/a", "unknown", "tbd", "todo"}
-STATUS_ONLY = {"exit 0", "exit code 0", "returns 0", "return code 0", "status 200", "http 200", "200 ok", "ok", "passes", "pass", "passed",
-               "tests pass", "all tests pass", "tests are green", "green", "works", "it works", "success", "succeeds", "no errors"}
+# An oracle that is only one of these statuses names no observable result.
+STATUS_ONLY = tuple(re.compile(pattern) for pattern in (
+    r"(?:the )?(?:command |process |script |program |it |build )?(?:exits?|exit code|exit status|return code|returns?|rc|status(?: code)?)(?: is| equals| of| with| =| ==)? (?:0|zero)",
+    r"(?:the )?(?:http )?(?:status|response)?(?: code)?(?: is| equals| of| =| ==)? ?(?:http )?200(?: ok)?",
+    r"(?:it |the (?:endpoint|server|request|api|service) )?returns?(?: an?)?(?: http)?(?: status)?(?: code)? 200(?: ok)?",
+    r"(?:all )?(?:of )?(?:the )?(?:unit |integration |e2e |end-to-end )?(?:tests?|checks?|suite|test suite|gates?)(?: all)? (?:pass(?:es|ed)?|succeed(?:s|ed)?|are green|is green|are passing|is passing|run green)",
+    r"(?:it |everything |the build |build |the command |command )?(?:works|succeeds|succeeded|passes|passed|pass|is green|green|ok|runs)",
+    r"(?:ok|success|successful|no errors?|no failures?|without errors)",
+))
 WORKFLOW_HOST = "claude-code-workflow"
+BUDGET_BLOCKERS = {"rework_budget", "support_budget", "non_converging"}
 INSTANT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}(?::?[0-9]{2})?)?", re.IGNORECASE)
 
 
@@ -92,7 +100,7 @@ def oracle(value: Any, label: str) -> str:
     words = value.split()
     status = " ".join(words).lower()
     status = status[:-1].rstrip() if status.endswith(".") else status
-    require(len(words) >= 4 and status not in STATUS_ONLY, "weak_oracle", f"{label} must name an observable result, not only a status such as exit 0 or passes.")
+    require(len(words) >= 3 and not any(pattern.fullmatch(status) for pattern in STATUS_ONLY), "weak_oracle", f"{label} must name an observable result, not only a status such as exit 0 or passes.")
     return value
 
 
@@ -337,16 +345,21 @@ def _authorize_standing(root, actor: str, evidence: str, expected_revision=None,
     return load(root)
 
 
-def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None, until=None, max_level=None, triggers=None) -> dict:
-    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "standing-approval"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None, until=None, max_level=None, triggers=None, task=None) -> dict:
+    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "rework-budget", "standing-approval"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+    require(task is None or scope == "rework-budget", "invalid_authorization_task", "Only rework-budget authority names a task.")
     if scope == "standing-approval":
-        require(count is None, "invalid_authorization_count", "Only fix-budget authority takes a count.")
+        require(count is None, "invalid_authorization_count", "Only fix-budget and rework-budget authority take a count.")
         return _authorize_standing(root, actor, evidence, expected_revision, targets=targets, until=until, max_level=max_level, triggers=triggers)
     require(until is None and max_level is None and triggers is None, "invalid_standing_approval", "until, max_level and triggers apply only to a standing approval.")
     if scope == "fix-budget":
         require(type(count) is int and 1 <= count <= 3, "invalid_fix_budget", "A fix-budget extension needs an explicit integer count from 1 to 3.")
+    elif scope == "rework-budget":
+        require(type(count) is int and 1 <= count <= 2, "invalid_rework_budget", "A rework-budget extension needs an explicit integer count from 1 to 2.")
     else:
-        require(count is None, "invalid_authorization_count", "Only fix-budget authority takes a count.")
+        require(count is None, "invalid_authorization_count", "Only fix-budget and rework-budget authority take a count.")
+    if scope == "rework-budget":
+        return _authorize_rework_budget(root, actor, evidence, expected_revision, task=task, count=count, targets=targets)
     with transaction(root, "authority_recorded", expected_revision) as run:
         assert_plan(run)
         if scope == "merge":
@@ -374,6 +387,29 @@ def authorize(root, scope: str, actor: str, evidence: str, expected_revision=Non
         else:
             run["authorizations"][scope] = grant
     return load(root)
+
+
+def _authorize_rework_budget(root, actor: str, evidence: str, expected_revision=None, *, task=None, count=None, targets=None) -> dict:
+    """Record explicit authority for more rounds, bound to the current budget blocker, plan hash and version."""
+    require(targets is None, "invalid_authorization_target", "Gate targets apply only to test authority.")
+    with transaction(root, "rework_budget_recorded", expected_revision) as run:
+        assert_plan(run)
+        if task is not None:
+            task_plan(run, identifier(task))
+        blocker = run.get("blocker") or {}
+        require(run["state"] == "BLOCKED" and blocker.get("code") in BUDGET_BLOCKERS and blocker.get("task") == task, "rework_budget_state",
+                "Record rework-budget authority after a rework_budget, support_budget or non_converging block, for the task it names (no --task for the integration).")
+        kind = "support" if blocker["code"] == "support_budget" else "code-fix" if task is not None else "integration"
+        run.setdefault("rework_budget_grants", []).append({**attestation(actor, evidence), "scope": "rework-budget", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"],
+                                                           "task": task, "count": count, "kind": kind, "blocker_code": blocker["code"], "blocker_at": blocker["at"]})
+    return load(root)
+
+
+def rework_limits(run: dict, task_id: str | None) -> dict:
+    """Two code-fix and two test-plan/environment rounds per task, plus explicit rework-budget grants of this plan version."""
+    grants = [grant for grant in run.get("rework_budget_grants", []) if grant.get("task") == task_id
+              and run.get("plan_hash") and grant.get("plan_hash") == run["plan_hash"] and grant.get("spec_version") == run.get("spec_version")]
+    return {kind: 2 + sum(grant["count"] for grant in grants if grant["kind"] == kind) for kind in ("code-fix", "support", "integration")}
 
 
 def need_authority(run: dict, scope: str, *, target: str | None = None) -> None:
@@ -497,6 +533,14 @@ def snapshot(run: dict, task_id: str | None = None) -> dict:
 def _implementation_state(run: dict) -> None:
     assert_plan(run)
     require(run["state"] == "IMPLEMENTING" and not run.get("integration"), "wrong_state", "Implementation dispatch and rework require an active, unintegrated run.")
+    need_authority(run, "implement")
+
+
+def _collection_state(run: dict) -> None:
+    """Collecting or abandoning an existing dispatch also works while implementation is blocked; dispatching does not."""
+    assert_plan(run)
+    blocked = run["state"] == "BLOCKED" and (run.get("blocker") or {}).get("from") == "IMPLEMENTING"
+    require((run["state"] == "IMPLEMENTING" or blocked) and not run.get("integration"), "wrong_state", "Collecting a dispatch requires an active or blocked, unintegrated implementation.")
     need_authority(run, "implement")
 
 
@@ -697,15 +741,30 @@ def _exclusive_dispatch_available(run: dict, task_id: str) -> None:
             require(job["task"] != task_id and not resources.intersection(job["resources"]), "resource_in_use", "A recorded gate job still holds this task worktree or an exclusive resource; collect its actual result or explicitly recover its ended processes.")
 
 
-def _pre_dispatch_content(owner: dict, snap: dict) -> None:
-    """Nothing may write the task worktree between preparation or a failing result and the next dispatch."""
+def _rework_baseline(run: dict, task_id: str, owner: dict) -> dict | None:
+    """The latest content the engine itself observed in this task worktree.
+
+    Candidates are every accepted report of the attempt, every later gate's after-snapshot
+    taken in the same worktree, and the snapshot recorded when a dispatch was abandoned.
+    """
+    observed = [(report["at"], report["snapshot"]["content"]) for report in owner.get("reports", []) if report.get("snapshot")]
+    observed += [(gate["at"], gate["after"]["content"]) for gate in run["gates"]
+                 if gate.get("task") == task_id and (gate.get("after") or {}).get("path") == owner["path"]]
+    observed += [(entry["at"], entry["baseline"]["content"]) for entry in owner.get("rework_history", []) if entry.get("baseline")]
+    if not observed:
+        return None
+    at, content = max(observed, key=lambda item: parse_instant(item[0], "Observation time"))
+    return {"at": at, "content": content}
+
+
+def _pre_dispatch_content(run: dict, task_id: str, owner: dict, snap: dict) -> None:
+    """Nothing may write the task worktree between preparation or the engine's last observation and the next dispatch."""
     if owner["status"] == "PREPARED":
         require(not snap["files"], "pre_dispatch_changes", "The task worktree already differs from its prepared base before any dispatch; preserve it and find out who wrote it.")
         return
-    history = owner.get("rework_history") or []
-    failing = (history[-1].get("report") or {}).get("snapshot") if history else None
-    if failing:
-        require(snap["content"] == failing["content"], "pre_dispatch_changes", "The task worktree changed after the failing result that started this rework round and before the new dispatch; preserve it and find out who wrote it.")
+    baseline = _rework_baseline(run, task_id, owner)
+    if baseline:
+        require(snap["content"] == baseline["content"], "pre_dispatch_changes", f"The task worktree changed after the engine last observed it ({baseline['at']}) and before the new dispatch; preserve it and find out who wrote it.")
 
 
 def _typed_actor(actor, label: str) -> str:
@@ -722,7 +781,7 @@ def register_agent(root, task_id: str, actor: str | None = None, host: str | Non
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] in {"PREPARED", "REWORK"}, "task_state", "Task is not ready for dispatch.")
         owned_worktree_record(run, owner, task_id=task_id)
-        _pre_dispatch_content(owner, snapshot(run, task_id))
+        _pre_dispatch_content(run, task_id, owner, snapshot(run, task_id))
         _require_current_dependencies(run, task_id)
         _exclusive_dispatch_available(run, task_id)
         sequence = len(owner.get("dispatches", [])) + 1
@@ -779,15 +838,24 @@ def validate_report(result: dict) -> None:
 
 
 def check_source_event(source_event: str, dispatch: dict) -> None:
-    """Refuse registration placeholders and results observed before their dispatch existed."""
+    """Refuse registration placeholders and results observed before their dispatch existed.
+
+    Every ISO-8601 timestamp in the source event is read; one without a zone is UTC. The event
+    is refused only when all of them are earlier than the registration: the latest one must be
+    at or after it, compared at that timestamp's own precision. An event may still quote an
+    earlier time, for example the registration itself, next to its observation time.
+    """
     value = source_event.strip().lower()
     echoes = {str(dispatch.get(key) or "").strip().lower() for key in ("dispatch_id", "handle")} - {""}
     require(value not in PLACEHOLDER_EVENTS and value not in echoes, "placeholder_source_event", "source_event must reference the actual host result, not a registration placeholder, the dispatch ID or the handle.")
     registered = parse_instant(dispatch.get("registered_at"), "Dispatch registration time")
+    observed = []
     for match in INSTANT.finditer(source_event):
-        observed, digits = _instant(match)
+        instant, digits = _instant(match)
         floor = registered.replace(microsecond=registered.microsecond - registered.microsecond % 10 ** (6 - digits))
-        require(observed >= floor, "source_event_predates_dispatch", f"The result observed at {match.group(0)} predates its dispatch registration at {dispatch['registered_at']}; collect the current dispatch's actual result.")
+        observed.append((instant >= floor, match.group(0)))
+    require(not observed or any(later for later, _ in observed), "source_event_predates_dispatch",
+            f"Every time in the source event ({', '.join(stamp for _, stamp in observed)}) predates its dispatch registration at {dispatch['registered_at']}; collect the current dispatch's actual result.")
 
 
 def _accept_task_report(run: dict, task_id: str, result: dict) -> None:
@@ -810,7 +878,7 @@ def _accept_task_report(run: dict, task_id: str, result: dict) -> None:
 
 def report_task(root, task_id: str, actor: str, result: dict, expected_revision=None) -> dict:
     with transaction(root, "task_report_received", expected_revision) as run:
-        _implementation_state(run)
+        _collection_state(run)
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] == "DISPATCHED" and owner["agent"]["actor"] == actor, "agent_mismatch", "Only the registered task actor can supply its report.")
         require(not owner["agent"].get("via_workflow"), "workflow_report_required", "A workflow dispatch reports only through task-import from the host-written journal.")
@@ -821,7 +889,7 @@ def report_task(root, task_id: str, actor: str, result: dict, expected_revision=
 
 
 def _journal_evidence(found: dict) -> dict:
-    return {"path": found["journal"], **{key: found[key] for key in ("run_id", "agent_id", "key", "label", "line_sha256", "transcript_sha256")}}
+    return {"path": found["journal"], **{key: found[key] for key in ("run_id", "agent_id", "key", "label", "line_sha256", "transcript_sha256", "host_root")}}
 
 
 def import_task_report(root, task_id: str, *, journal=None, search_root=None, expected_revision=None) -> dict:
@@ -836,12 +904,16 @@ def import_task_report(root, task_id: str, *, journal=None, search_root=None, ex
     require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results name this dispatch_id; select the exact journal after inspecting them.")
     found = matches[0]
     with transaction(root, "task_report_imported", expected_revision) as run:
-        _implementation_state(run)
+        _collection_state(run)
         owner = run["tasks"].get(task_id)
         current = (owner or {}).get("agent") or {}
         require(owner and owner["status"] == "DISPATCHED" and current.get("via_workflow") and current.get("dispatch_id") == dispatch_id, "not_workflow_dispatch", "The workflow dispatch changed while its journal was searched; search again.")
         report = {**found["result"], "source_event": f"workflow-journal:{found['run_id']}/{found['agent_id']}#{found['line_sha256'][:16]}"}
         validate_report(report)
+        if "tree" in report:
+            index = git_ops.inventory(owner["path"], owner["base_sha"])["tree"]
+            require(isinstance(report["tree"], str) and report["tree"].strip() == index, "import_tree_mismatch",
+                    f"The imported result reports tree {report['tree']!r} but the task worktree's staged tree is {index}; the worktree changed after the agent returned or the result belongs elsewhere.")
         identity = {"actor": f"workflow-agent:{found['run_id']}/{found['agent_id']}", "handle": f"{found['run_id']}/{found['agent_id']}",
                     "journal": _journal_evidence(found), "liveness": "returned"}
         current.update(copy.deepcopy(identity))
@@ -949,7 +1021,8 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
     receipt = {"key": key, "task": task_id, "command": argv, "exit_code": code, "timed_out": timed_out,
                "planned_repeat": repeat, "attempts": attempts, "outcome": outcome,
                "duration_seconds": round(time.monotonic() - start, 3), "at": now(), "snapshot": before,
-               "unchanged": before["content"] == after["content"], "log": name, "log_hash": hashlib.sha256(Path(name).read_bytes()).hexdigest()}
+               "unchanged": before["content"] == after["content"], "log": name, "log_hash": hashlib.sha256(Path(name).read_bytes()).hexdigest(),
+               "after": {"content": after["content"], "base_sha": after["base_sha"], "path": owner["path"]}}
     receipt["passed"] = code == 0 and not timed_out and receipt["unchanged"] and len(attempts) == repeat
     def admit(current):
         require(current["state"] not in TERMINAL, "terminal_run", "This run has ended.")
@@ -1052,10 +1125,13 @@ def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, 
             require(fix.get("report") and evidence_current(fix["report"], snapshot(run)), "stale_fix_report", "The integration fix report must match the current integration content.")
     require(gates_current(run, task_id), "gate_required", "Run all planned gates on the current content before review.")
     require(actor not in _writer_actors(run), "reviewer_not_independent", "The reviewer must not be a current or previous implementation actor.")
-    receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": snapshot(run, task_id), **(extra or {})}
+    receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": snapshot(run, task_id),
+               "plan_hash": run["plan_hash"], "spec_version": run["spec_version"], **(extra or {})}
     if verdict == "FAIL":
         receipt.update(decision=decision, finding_keys=finding_keys)
     run["reviews"].append(receipt)
+    if task_id is None and verdict == "FAIL":
+        _integrated_finding(run, receipt, evidence)
     if task_id:
         owner = run["tasks"][task_id]
         require(owner["status"] in {"REPORTED", "VERIFIED"}, "task_state", "Review requires a returned task report.")
@@ -1072,30 +1148,84 @@ def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, 
             _mark_rework(run, task_id, evidence, decision, finding_keys)
 
 
+def _integrated_finding(run: dict, receipt: dict, reason: str) -> None:
+    """Apply the triage decision of an integrated FAIL review; code-fix keeps the same-scope fix path."""
+    if receipt["decision"] == "requirements":
+        _block_task(run, "requirements_finding", f"A requirements finding needs revise and renewed approval, not an integration fix: {reason}")
+    elif receipt["decision"] == "human":
+        _block_task(run, "human_decision", f"A human decision is required: {reason}")
+    elif receipt["decision"] == "code-fix" and receipt["finding_keys"]:
+        earlier = [review for entry in run.get("verification_history", []) for review in entry.get("reviews", [])] + run["reviews"][:-1]
+        previous = next((review for review in reversed(earlier) if review.get("task") is None and review.get("verdict") == "FAIL"
+                         and review.get("plan_hash") == run["plan_hash"] and review.get("spec_version") == run["spec_version"]), None)
+        repeated = sorted(set(receipt["finding_keys"]) & set((previous or {}).get("finding_keys") or []))
+        if repeated:
+            _block_task(run, "non_converging", f"The same integrated finding survived a fix round ({', '.join(repeated)}); revise the plan, or record authorize --scope rework-budget --count N and resume.")
+
+
 def review(root, actor: str, verdict: str, evidence: str, *, task_id: str | None = None, expected_revision=None, decision="code-fix", finding_keys=None) -> dict:
     require(verdict in {"PASS", "FAIL"}, "invalid_verdict", "Review verdict is PASS or FAIL.")
     actor = _typed_actor(actor, "Reviewer identity")
     decision, finding_keys = triage(decision, finding_keys)
     review_evidence(verdict, evidence)
     with transaction(root, "independent_review_recorded", expected_revision) as run:
+        owner = run["tasks"].get(task_id) if task_id is not None else None
+        require(not ((owner or {}).get("agent") or {}).get("via_workflow"), "workflow_review_required",
+                "A task implemented through a workflow dispatch is reviewed only through review-token and review-import.")
         _record_review(run, root, actor, verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys)
     return load(root)
 
 
-def _review_token(run: dict, task_id: str | None, lens: str) -> dict:
-    lens = identifier(lens)
+def _review_target(task_id: str | None) -> str:
+    return f"task:{task_id}" if task_id is not None else "integration"
+
+
+def _review_identity(run: dict, task_id: str | None) -> dict:
+    """What a review request is bound to: exact content, plan version and the result under review."""
     require(run.get("plan"), "missing_plan", "Record a plan before requesting review.")
     if task_id is not None:
         task_plan(run, task_id)
+        report = (run["tasks"].get(task_id) or {}).get("report") or {}
+        subject = {"dispatch_id": report.get("dispatch_id"), "reported_at": report.get("at")}
+    else:
+        fix = run.get("integration_fix") or {}
+        subject = {"fix_dispatch_id": fix.get("dispatch_id"), "fix_status": fix.get("status")}
     snap = snapshot(run, task_id)
-    token = "review-" + digest({"run": run["root"], "task": task_id, "lens": lens, "content": snap["content"], "base_sha": snap["base_sha"],
-                                "plan_hash": run["plan_hash"], "spec_version": run["spec_version"]})[:32]
-    return {"token": token, "task": task_id, "lens": lens, "content": snap["content"]}
+    return {"task": task_id, "content": snap["content"], "base_sha": snap["base_sha"], "plan_hash": run["plan_hash"], "spec_version": run["spec_version"], "subject": subject}
 
 
-def review_token(root, *, task_id: str | None = None, lens: str = "default") -> dict:
-    """Read-only: the token a reviewer returns so its journal result binds this exact content and lens."""
-    return _review_token(load(root), task_id, lens)
+def _token(run: dict, request: dict, lens: str) -> str:
+    return "review-" + digest({"run": run["root"], "lens": lens, "request": request["request"], **request["identity"]})[:32]
+
+
+def _open_request(run: dict, task_id: str | None) -> dict | None:
+    request = run.get("review_requests", {}).get(_review_target(task_id))
+    if request and request["status"] == "open" and request["identity"] == _review_identity(run, task_id):
+        return request
+    return None
+
+
+def review_token(root, *, task_id: str | None = None, lens: str = "default", expected_revision=None) -> dict:
+    """Issue and record the token a reviewer returns, binding its verdict to this exact content and lens.
+
+    Requests are recorded per target: every lens issued for the same content and reviewed result
+    joins one open request, and review-import must import all of them together. A changed content,
+    report or fix, or an import of the request, starts a new request with new tokens.
+    """
+    lens = identifier(lens)
+    with transaction(root, "review_token_issued", expected_revision) as run:
+        assert_plan(run)
+        request = _open_request(run, task_id)
+        if request is None:
+            previous = run.setdefault("review_requests", {}).get(_review_target(task_id))
+            if previous:
+                run.setdefault("review_request_history", []).append({**previous, "status": "superseded" if previous["status"] == "open" else previous["status"]})
+            request = {"target": task_id, "identity": _review_identity(run, task_id), "request": run["revision"] + 1, "status": "open", "lenses": {}, "at": now()}
+            run["review_requests"][_review_target(task_id)] = request
+        request["lenses"].setdefault(lens, _token(run, request, lens))
+        issued = {"token": request["lenses"][lens], "task": task_id, "lens": lens, "content": request["identity"]["content"],
+                  "request": request["request"], "lenses": sorted(request["lenses"]), "revision": run["revision"] + 1}
+    return issued
 
 
 def _lens_result(lens: str, found: dict) -> dict:
@@ -1118,7 +1248,13 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     require(isinstance(lenses, (list, tuple)) and lenses and len(set(lenses)) == len(lenses), "invalid_lens", "Name one or more distinct review lenses.")
     decision, finding_keys = triage(decision, finding_keys)
     run = load(root)
-    tokens = {_review_token(run, task_id, lens)["token"]: lens for lens in lenses}
+    request = _open_request(run, task_id)
+    require(request, "review_not_requested", "No review-token request is open for the current content; request tokens with review-token first.")
+    extra = sorted(set(lenses) - set(request["lenses"]))
+    require(not extra, "review_not_requested", "These lenses were never issued for the current content: " + ", ".join(extra))
+    missing = sorted(set(request["lenses"]) - set(lenses))
+    require(not missing, "review_lenses_incomplete", "Import every lens issued for the current content in one call; missing: " + ", ".join(missing))
+    tokens = {request["lenses"][lens]: lens for lens in lenses}
     found = {lens: [] for lens in lenses}
     for match in workflow_journal.find_results(lambda result: result.get("review_token") in tokens, journal=journal, search_root=search_root):
         found[tokens[match["result"]["review_token"]]].append(match)
@@ -1133,7 +1269,8 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     review_evidence(verdict, evidence)
     actors = [item["actor"] for item in results]
     with transaction(root, "independent_review_imported", expected_revision) as run:
-        require(all(_review_token(run, task_id, lens)["token"] == token for token, lens in tokens.items()), "stale_review_token", "The reviewed content changed while the journal was searched; request review of the current content.")
+        current = _open_request(run, task_id)
+        require(current and current["request"] == request["request"] and current["lenses"] == request["lenses"], "stale_review_token", "The reviewed content or its review request changed while the journal was searched; request review of the current content.")
         writers = _writer_actors(run)
         writer_agents = {actor.split("/", 1)[1] for actor in writers if actor.startswith("workflow-agent:") and "/" in actor}
         agents = [item["journal"]["agent_id"] for item in results]
@@ -1146,6 +1283,7 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
                        extra={"reviewers": actors, "lenses": list(lenses), "source": "workflow-journal"})
         for item in results:
             used[item["journal"]["line_sha256"]] = {"task": task_id, "lens": item["lens"], "actor": item["actor"], "revision": run["revision"] + 1}
+        run["review_requests"][_review_target(task_id)] = {**current, "status": "imported", "imported_at": now()}
     return load(root)
 
 
@@ -1272,12 +1410,13 @@ def fix_budget(run: dict) -> dict:
     The base limit is two rounds. Each fix-budget grant bound to the current plan
     hash and specification version adds its count; grants recorded for another
     plan, or for an identical plan approved again after a revision, do not count.
+    A rework-budget grant for an integrated non_converging block adds its count as well.
     """
     used = (run.get("integration_fix") or {}).get("attempt", 0)
     current = run.get("plan_hash")
     extra = sum(grant["count"] for grant in run.get("fix_budget_grants", [])
                 if current and grant.get("plan_hash") == current and grant.get("spec_version") == run.get("spec_version"))
-    return {"used": used, "limit": 2 + extra}
+    return {"used": used, "limit": extra + rework_limits(run, None)["integration"]}
 
 
 def register_fix(root, actor: str, host: str, handle: str, reason: str, expected_revision=None) -> dict:
@@ -1332,37 +1471,65 @@ def block(root, reason: str, expected_revision=None) -> dict:
     return load(root)
 
 
+def _budget_grant(run: dict, blocker: dict) -> dict | None:
+    return next((grant for grant in run.get("rework_budget_grants", []) if grant.get("task") == blocker.get("task")
+                 and grant.get("blocker_at") == blocker.get("at") and grant.get("blocker_code") == blocker.get("code")
+                 and grant.get("plan_hash") == run.get("plan_hash") and grant.get("spec_version") == run.get("spec_version")), None)
+
+
 def resume(root, resolution: str, expected_revision=None) -> dict:
     with transaction(root, "resumed", expected_revision) as run:
         require(run["state"] == "BLOCKED" and run["blocker"], "not_blocked", "No blocker is recorded.")
-        require(run["blocker"].get("code") != "requirements_finding", "revision_required", "A requirements finding is resolved by revise and renewed approval, not by resume.")
+        blocker = run["blocker"]
+        require(blocker.get("code") != "requirements_finding", "revision_required", "A requirements finding is resolved by revise and renewed approval, not by resume.")
+        require(blocker.get("code") not in BUDGET_BLOCKERS or _budget_grant(run, blocker), "rework_budget_required",
+                "An exhausted or non-converging rework budget resumes only after authorize --scope rework-budget recorded for this block; otherwise revise.")
         text(resolution, "Observed blocker resolution")
-        run["state"] = run["blocker"]["from"]
-        run["blocker"] = None
+        if blocker.get("previous"):
+            run["blocker"] = blocker["previous"]
+        else:
+            run["state"] = blocker["from"]
+            run["blocker"] = None
     return load(root)
 
 
 def revise(root, reason: str, expected_revision=None) -> dict:
     with transaction(root, "semantic_revision_started", expected_revision) as run:
         assert_gates_idle(run)
-        require(not any(owner.get("status") == "DISPATCHED" for owner in run["tasks"].values())
+        open_workflow = sorted(task_id for task_id, owner in run["tasks"].items() if owner.get("status") == "DISPATCHED" and (owner.get("agent") or {}).get("via_workflow"))
+        require(not any(owner.get("status") == "DISPATCHED" and not (owner.get("agent") or {}).get("via_workflow") for owner in run["tasks"].values())
                 and (run.get("integration_fix") or {}).get("status") != "DISPATCHED",
-                "active_task", "Collect active implementation results before replacing their semantic plan.")
+                "active_task", "Collect or abandon active manual implementation dispatches before replacing their semantic plan.")
         text(reason, "Material revision reason")
         require(not run.get("pr"), "open_pr_revision", "Keep the existing PR and reconcile its reviewed scope explicitly before replacing this run plan.")
         if (Path(run["spec_root"]) / "spec-session.json").exists():
             spec_command(root, ["revise", "--reason", reason])
         run.setdefault("previous_versions", []).append({"version": run["spec_version"], "plan": run["plan"], "tasks": run["tasks"], "integration": run["integration"],
                                                         "integration_fix": run.get("integration_fix"), "integration_fix_history": run.get("integration_fix_history", []),
-                                                        "gates": run["gates"], "reviews": run["reviews"], "reason": reason})
+                                                        "gates": run["gates"], "reviews": run["reviews"], "reason": reason, "open_workflow_dispatches": open_workflow})
         run.update(state="DISCOVERY", plan=None, plan_hash=None, approval=None, authorizations={}, tasks={}, integration=None,
                    integration_fix=None, integration_fix_history=[], gates=[], reviews=[], blocker=None)
     return load(root)
 
 
-def _block_task(run: dict, code: str, reason: str) -> None:
-    run["blocker"] = {"reason": reason, "code": code, "from": run["state"], "at": now()}
+def _block_task(run: dict, code: str, reason: str, task_id: str | None = None) -> None:
+    """Block with a code; a block raised while already blocked stacks on the earlier one, which resume restores."""
+    blocker = {"reason": reason, "code": code, "task": task_id, "from": run["state"], "at": now()}
+    if run["state"] == "BLOCKED" and run.get("blocker"):
+        blocker.update({"from": run["blocker"]["from"], "previous": run["blocker"]})
+    run["blocker"] = blocker
     run["state"] = "BLOCKED"
+
+
+def _rounds_word(limit: int) -> str:
+    return {2: "Two", 3: "Three", 4: "Four"}.get(limit, str(limit))
+
+
+def _count_support_round(run: dict, task_id: str, owner: dict) -> None:
+    owner["support_rounds"] = owner.get("support_rounds", 0) + 1
+    limit = rework_limits(run, task_id)["support"]
+    if owner["support_rounds"] > limit:
+        _block_task(run, "support_budget", f"{_rounds_word(limit)} test-plan or environment rounds are exhausted; fix the plan or the environment explicitly.", task_id)
 
 
 def _mark_rework(run: dict, task_id: str, reason: str, decision: str = "code-fix", finding_keys=()) -> None:
@@ -1386,19 +1553,18 @@ def _mark_rework(run: dict, task_id: str, reason: str, decision: str = "code-fix
     owner.update(status="REWORK", patch=None, report=None)
     if decision == "code-fix":
         owner["rework_rounds"] = owner.get("rework_rounds", 0) + 1
+        limit = rework_limits(run, task_id)["code-fix"]
         repeated = sorted(set(finding_keys) & set((previous or {}).get("finding_keys") or []))
-        if owner["rework_rounds"] > 2:
-            _block_task(run, "rework_budget", "Two rework rounds exhausted; revise or obtain explicit escalation.")
+        if owner["rework_rounds"] > limit:
+            _block_task(run, "rework_budget", f"{_rounds_word(limit)} rework rounds exhausted; revise, or record authorize --scope rework-budget --task {task_id} --count N and resume.", task_id)
         elif repeated:
-            _block_task(run, "non_converging", f"The same finding survived a rework round ({', '.join(repeated)}); revise the plan or escalate explicitly.")
+            _block_task(run, "non_converging", f"The same finding survived a rework round ({', '.join(repeated)}); revise the plan or escalate explicitly.", task_id)
     elif decision in {"test-plan", "environment"}:
-        owner["support_rounds"] = owner.get("support_rounds", 0) + 1
-        if owner["support_rounds"] > 2:
-            _block_task(run, "support_budget", "Two test-plan or environment rounds are exhausted; fix the plan or the environment explicitly.")
+        _count_support_round(run, task_id, owner)
     elif decision == "requirements":
-        _block_task(run, "requirements_finding", f"A requirements finding needs revise and renewed approval, not implementer rework: {reason}")
+        _block_task(run, "requirements_finding", f"A requirements finding needs revise and renewed approval, not implementer rework: {reason}", task_id)
     else:
-        _block_task(run, "human_decision", f"A human decision is required: {reason}")
+        _block_task(run, "human_decision", f"A human decision is required: {reason}", task_id)
 
 
 def rework(root, task_id: str, reason: str, expected_revision=None, *, decision="code-fix", finding_keys=None) -> dict:
@@ -1409,12 +1575,50 @@ def rework(root, task_id: str, reason: str, expected_revision=None, *, decision=
     return load(root)
 
 
+def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dict:
+    """End a dispatch that will not return a usable result, keeping its worktree as the new rework baseline.
+
+    For a workflow dispatch the host journals are read first: failed agents under the task's
+    implement label are recorded (and kept as possible writers), and so is whether any result
+    names the dispatch. The round counts toward the task's test-plan/environment budget.
+    """
+    import workflow_journal
+    reason = text(reason, "Reason for abandoning the dispatch")
+    owner = load(root)["tasks"].get(task_id)
+    agent = (owner or {}).get("agent") or {}
+    require(owner and owner["status"] == "DISPATCHED", "task_state", "Only a dispatched task can be abandoned.")
+    observed = None
+    if agent.get("via_workflow"):
+        since = parse_instant(agent["registered_at"], "Dispatch registration time").timestamp() - 1
+        observed = workflow_journal.observe_dispatch(f"implement:{task_id}", agent["dispatch_id"], since=since)
+    with transaction(root, "task_dispatch_abandoned", expected_revision) as run:
+        _collection_state(run)
+        owner = run["tasks"].get(task_id)
+        require(owner and owner["status"] == "DISPATCHED" and owner["agent"]["dispatch_id"] == agent["dispatch_id"], "task_state", "The dispatch changed while the journals were read; inspect the task again.")
+        owned_worktree_record(run, owner, task_id=task_id)
+        snap = snapshot(run, task_id)
+        record = {"reason": reason, "at": now(), "journal": observed}
+        owner["agent"].update(liveness="abandoned", abandoned=copy.deepcopy(record))
+        if owner.get("dispatches"):
+            owner["dispatches"][-1].update(liveness="abandoned", abandoned=copy.deepcopy(record))
+        for failed in (observed or {}).get("failed", []):
+            if failed.get("agent_id") and workflow_journal.AGENT_ID.fullmatch(str(failed["agent_id"])):
+                run.setdefault("writer_history", []).append({"actor": f"workflow-agent:{failed['run_id']}/{failed['agent_id']}", "task": task_id, "attempt": owner["attempt"],
+                                                             "dispatch_id": agent["dispatch_id"], "abandoned": True, "journal": failed})
+        owner.setdefault("rework_history", []).append({"reason": reason, "report": None, "patch": None, "at": record["at"], "decision": "abandon",
+                                                       "finding_keys": [], "baseline": snap, "abandoned_dispatch": agent["dispatch_id"], "journal": observed})
+        owner["status"] = "REWORK"
+        _count_support_round(run, task_id, owner)
+    return load(root)
+
+
 def status(root) -> dict:
     run = load(root)
     result = {k: run[k] for k in ("id", "root", "primary", "revision", "state", "spec_version", "plan_hash", "blocker", "pr")}
     result["classification"] = run["plan"]["classification"] if run.get("plan") else None
     result["tasks"] = {tid: {"status": t["status"], "path": t["path"], "agent": t.get("agent"), "via_workflow": bool((t.get("agent") or {}).get("via_workflow")),
-                             "rework_rounds": t.get("rework_rounds", 0), "support_rounds": t.get("support_rounds", 0)} for tid, t in run["tasks"].items()}
+                             "rework_rounds": t.get("rework_rounds", 0), "support_rounds": t.get("support_rounds", 0),
+                             "limits": {kind: limit for kind, limit in rework_limits(run, tid).items() if kind != "integration"}} for tid, t in run["tasks"].items()}
     result["blocker_code"] = (run.get("blocker") or {}).get("code")
     grant = run.get("standing_approval")
     result["standing_approval"] = {key: grant[key] for key in ("actor", "until", "max_level", "triggers")} if grant else None

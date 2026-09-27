@@ -6,8 +6,10 @@ temporary directory. None of it proves that a host workflow, an agent or a perso
 from __future__ import annotations
 
 import datetime as dt
+import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -49,6 +51,12 @@ class Journal:
         if transcript:
             (self.dir / f"agent-{agent_id}.jsonl").write_text(json.dumps({"type": "fixture transcript", "agent": agent_id}) + "\n")
 
+    def failed(self, agent_id: str, label: str) -> None:
+        key = "v2:" + hashlib.sha256(json.dumps([agent_id, label]).encode()).hexdigest()[:16]
+        self.line({"type": "started", "key": key, "agentId": agent_id, "label": label, "phase": "Implement"})
+        self.line({"type": "failed", "key": key, "agentId": agent_id})
+        (self.dir / f"agent-{agent_id}.jsonl").write_text(json.dumps({"type": "fixture transcript", "agent": agent_id}) + "\n")
+
 
 def worker_result(dispatch_id: str) -> dict:
     return {"dispatch_id": dispatch_id, "summary": "Changed only the fixture value.",
@@ -60,11 +68,25 @@ def lens(token: str, verdict="PASS", evidence=PASS_EVIDENCE, defects=None) -> di
     return {"review_token": token, "verdict": verdict, "evidence": evidence, "defects": defects or []}
 
 
+def multi_plan(*names):
+    """The fixture plan plus independent tasks that each own one file named after the task."""
+    value = plan()
+    for name in names:
+        extra = copy.deepcopy(value["tasks"][0])
+        extra.update(id=name, title=f"Write {name}", paths=[f"{name}.txt"],
+                     gates=[gate([sys.executable, "-B", "-c", f"from pathlib import Path; assert Path('{name}.txt').read_text() == '{name}\\n'"])])
+        value["tasks"].append(extra)
+    return value
+
+
 class ControlFixture(RunFixture):
     def setUp(self):
         super().setUp()
         self.search = self.home / "journals"
         self.search.mkdir()
+        host = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.search)})
+        host.start()
+        self.addCleanup(host.stop)
 
     def assert_code(self, code, function, *args, **kwargs):
         with self.assertRaises(e.RunError) as caught:
@@ -72,10 +94,10 @@ class ControlFixture(RunFixture):
         self.assertEqual(code, caught.exception.code, caught.exception.message)
         return caught.exception
 
-    def write_value(self, task="value", content="after\n") -> Path:
+    def write_value(self, task="value", content="after\n", name="value.txt") -> Path:
         path = Path(e.load(self.root)["tasks"][task]["path"])
-        (path / "value.txt").write_text(content)
-        git(path, "add", "--", "value.txt")
+        (path / name).write_text(content)
+        git(path, "add", "--", name)
         return path
 
     def workflow_dispatch(self, task="value") -> str:
@@ -121,6 +143,22 @@ class PreDispatchTests(ControlFixture):
         git(path, "add", "--", "value.txt")
         self.assertEqual("DISPATCHED", e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:rework")["tasks"]["value"]["status"])
 
+    def test_gate_after_snapshot_is_the_rework_baseline_but_later_writes_are_refused(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [gate([sys.executable, "-B", "-c", "from pathlib import Path; p = Path('value.txt'); p.write_text(p.read_text() + 'gate output\\n')"])]
+        self.begin(value)
+        path = self.implement()
+        receipt = e.execute_gate(self.root, task_id="value")
+        self.assertFalse(receipt["passed"])
+        self.assertNotEqual(receipt["snapshot"]["content"], receipt["after"]["content"])
+        self.assertEqual(str(path), receipt["after"]["path"])
+        e.rework(self.root, "value", "Synthetic finding: the gate itself rewrote the value file.", decision="test-plan")
+        observed = (path / "value.txt").read_text()
+        (path / "value.txt").write_text("written by the coordinator\n")
+        self.assert_code("pre_dispatch_changes", e.register_agent, self.root, "value", "fixture-writer-value", "unit-test", "synthetic:after-gate")
+        (path / "value.txt").write_text(observed)
+        self.assertEqual("DISPATCHED", e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:after-gate")["tasks"]["value"]["status"])
+
 
 class SourceEventTests(ControlFixture):
     def test_placeholder_source_events_are_refused(self):
@@ -144,7 +182,9 @@ class SourceEventTests(ControlFixture):
         result = worker_result(dispatch_id)
         self.assert_code("source_event_predates_dispatch", e.report_task, self.root, "value", "fixture-writer-value", {**result, "source_event": "observation: x 2026-09-13T20:47:50Z"})
         self.assert_code("source_event_predates_dispatch", e.report_task, self.root, "value", "fixture-writer-value", {**result, "source_event": "observed 2026-09-13T22:47:50+02:00"})
-        accepted = e.report_task(self.root, "value", "fixture-writer-value", {**result, "source_event": "observation: x 2026-09-13T20:52:10Z"})
+        self.assert_code("source_event_predates_dispatch", e.report_task, self.root, "value", "fixture-writer-value", {**result, "source_event": "started 2026-09-13T20:40:00Z, observed 2026-09-13T20:48:02"})
+        # A zone-less time is UTC: 20:52:10 is after the 20:48:03Z registration, and the earlier quoted time does not refuse it.
+        accepted = e.report_task(self.root, "value", "fixture-writer-value", {**result, "source_event": "dispatch requested 2026-09-13T20:40:00Z; final message observed 2026-09-13T20:52:10"})
         self.assertEqual("REPORTED", accepted["tasks"]["value"]["status"])
 
     def test_integration_fix_report_checks_its_source_event(self):
@@ -171,20 +211,25 @@ class JournalImportTests(ControlFixture):
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         before = e.load(self.root)["revision"]
         token = e.review_token(self.root, task_id="value", lens="correctness")
-        self.assertEqual(before, e.load(self.root)["revision"])
+        self.assertEqual((before + 1, before + 1, ["correctness"]), (e.load(self.root)["revision"], token["revision"], token["lenses"]))
+        self.assertEqual(token["token"], e.review_token(self.root, task_id="value", lens="correctness")["token"])
         Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token["token"]))
         verified = e.import_review(self.root, lenses=["correctness"], task_id="value", search_root=self.search)
         self.assertEqual("VERIFIED", verified["tasks"]["value"]["status"])
         receipt = verified["reviews"][-1]
         self.assertEqual(("PASS", "workflow-agent:wf_fixture-0002/a0fixturerev01"), (receipt["verdict"], receipt["actor"]))
         self.assertEqual("correctness", json.loads(receipt["evidence"])["lenses"][0]["lens"])
+        self.assertEqual("imported", verified["review_requests"]["task:value"]["status"])
+        renewed = e.review_token(self.root, task_id="value", lens="correctness")
+        self.assertNotEqual(token["request"], renewed["request"])
+        self.assertNotEqual(token["token"], renewed["token"])
 
     def test_journal_refusals_leave_the_dispatch_pending(self):
         self.begin()
         dispatch_id = self.workflow_dispatch()
         result = worker_result(dispatch_id)
-        elsewhere = self.home / "elsewhere"
-        elsewhere.mkdir()
+        elsewhere = self.search / "cases" / "symlink-target"
+        elsewhere.mkdir(parents=True)
         cases = {
             "journal_result_missing": lambda j: j.agent(IMPLEMENTER, worker_result("another-dispatch")),
             "journal_result_ambiguous": lambda j: (j.agent(IMPLEMENTER, result), j.agent("a0fixtureimpl02", result)),
@@ -193,11 +238,11 @@ class JournalImportTests(ControlFixture):
         }
         for code, write in cases.items():
             with self.subTest(code=code):
-                root = self.home / ("journals-" + code)
+                root = self.search / "cases" / code
                 write(Journal(root))
                 self.assert_code(code, e.import_task_report, self.root, "value", search_root=root)
         with self.subTest(code="journal_symlink"):
-            root = self.home / "journals-symlink"
+            root = self.search / "cases" / "symlink"
             linked = Journal(root)
             Journal(elsewhere).agent(IMPLEMENTER, result)
             linked.path.unlink()
@@ -207,6 +252,31 @@ class JournalImportTests(ControlFixture):
             self.assert_code("journal_symlink", e.import_task_report, self.root, "value", journal=linked.path)
         current = e.load(self.root)["tasks"]["value"]
         self.assertEqual(("DISPATCHED", "workflow-pending"), (current["status"], current["agent"]["actor"]))
+
+    def test_journals_outside_the_host_root_or_behind_a_symlink_are_refused(self):
+        self.begin()
+        result = worker_result(self.workflow_dispatch())
+        outside = Journal(self.home / "outside")
+        outside.agent(IMPLEMENTER, result)
+        self.assert_code("journal_outside_host", e.import_task_report, self.root, "value", search_root=self.home / "outside")
+        self.assert_code("journal_outside_host", e.import_task_report, self.root, "value", journal=outside.path)
+        real = Journal(self.search / "cases" / "real")
+        real.agent(IMPLEMENTER, result)
+        (self.search / "linked-project").symlink_to(real.dir.parents[3], target_is_directory=True)
+        aliased = self.search / "linked-project" / "fixture-session" / "subagents" / "workflows" / RUN_ID / "journal.jsonl"
+        self.assert_code("journal_symlink", e.import_task_report, self.root, "value", journal=aliased)
+        run = e.import_task_report(self.root, "value", journal=real.path)
+        self.assertEqual((str(self.search), str(real.path)), (run["tasks"]["value"]["agent"]["journal"]["host_root"], run["tasks"]["value"]["agent"]["journal"]["path"]))
+
+    def test_imported_tree_must_match_the_staged_worktree(self):
+        self.begin()
+        dispatch_id = self.workflow_dispatch()
+        tree = git(Path(e.load(self.root)["tasks"]["value"]["path"]), "write-tree")
+        Journal(self.search / "cases" / "stale").agent(IMPLEMENTER, {**worker_result(dispatch_id), "tree": "0" * 40})
+        self.assert_code("import_tree_mismatch", e.import_task_report, self.root, "value", search_root=self.search / "cases" / "stale")
+        Journal(self.search / "cases" / "current").agent(IMPLEMENTER, {**worker_result(dispatch_id), "tree": tree})
+        run = e.import_task_report(self.root, "value", search_root=self.search / "cases" / "current")
+        self.assertEqual(("REPORTED", tree), (run["tasks"]["value"]["status"], run["tasks"]["value"]["report"]["tree"]))
 
     def test_imported_journal_event_cannot_be_reused_by_a_manual_dispatch(self):
         imported = self.imported()["tasks"]["value"]["report"]
@@ -239,12 +309,14 @@ class ReviewImportTests(ControlFixture):
         same_run = Journal(self.search)
         same_run.agent(IMPLEMENTER, lens(token))
         self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=same_run.path)
+        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+
+    def test_implementer_agent_id_under_another_workflow_run_cannot_review(self):
+        self.reviewed_ready()
+        token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         other_run = Journal(self.search, "wf_fixture-0002")
         other_run.agent(IMPLEMENTER, lens(token))
         self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=other_run.path)
-        independent = Journal(self.search, "wf_fixture-0003")
-        independent.agent("a0fixturerev01", lens(token))
-        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["correctness"], task_id="value", journal=independent.path)["tasks"]["value"]["status"])
 
     def test_two_lenses_from_one_reviewer_agent_are_refused(self):
         self.reviewed_ready()
@@ -253,11 +325,6 @@ class ReviewImportTests(ControlFixture):
         for token in tokens:
             shared.agent("a0fixturerev01", lens(token))
         self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness", "security"], task_id="value", journal=shared.path)
-        distinct = Journal(self.search, "wf_fixture-0003")
-        distinct.agent("a0fixturerev01", lens(tokens[0]))
-        distinct.agent("a0fixturerev02", lens(tokens[1]))
-        receipt = e.import_review(self.root, lenses=["correctness", "security"], task_id="value", journal=distinct.path)["reviews"][-1]
-        self.assertEqual("workflow-agent:wf_fixture-0003/a0fixturerev01+workflow-agent:wf_fixture-0003/a0fixturerev02", receipt["actor"])
 
     def test_one_failing_lens_fails_the_review_and_records_finding_keys(self):
         self.reviewed_ready()
@@ -272,6 +339,7 @@ class ReviewImportTests(ControlFixture):
         keys = sorted(["value.txt|wrong-value", "|missing-test"])
         self.assertEqual(("FAIL", "code-fix", keys), (receipt["verdict"], receipt["decision"], receipt["finding_keys"]))
         self.assertEqual(["PASS", "FAIL"], [item["verdict"] for item in json.loads(receipt["evidence"])["lenses"]])
+        self.assertEqual("workflow-agent:wf_fixture-0002/a0fixturerev01+workflow-agent:wf_fixture-0002/a0fixturerev02", receipt["actor"])
         owner = run["tasks"]["value"]
         self.assertEqual(("REWORK", 1, keys), (owner["status"], owner["rework_rounds"], owner["rework_history"][-1]["finding_keys"]))
 
@@ -282,8 +350,30 @@ class ReviewImportTests(ControlFixture):
         journal.agent("a0fixturerev01", lens("review-" + "0" * 32))
         self.assert_code("journal_result_missing", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
         journal.agent("a0fixturerev01", lens(token))
-        journal.agent("a0fixturerev02", lens(token))
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token))
         self.assert_code("journal_result_ambiguous", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
+        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+
+    def test_review_import_requires_every_issued_lens_of_the_open_request(self):
+        self.reviewed_ready()
+        self.assert_code("review_not_requested", e.import_review, self.root, lenses=["correctness"], task_id="value", search_root=self.search)
+        first = e.review_token(self.root, task_id="value", lens="correctness")
+        second = e.review_token(self.root, task_id="value", lens="security")
+        self.assertEqual((first["request"], ["correctness", "security"]), (second["request"], second["lenses"]))
+        journal = Journal(self.search, "wf_fixture-0002")
+        journal.agent("a0fixturerev01", lens(first["token"]))
+        journal.agent("a0fixturerev02", lens(second["token"], "FAIL", "The staged value misses the planned newline."))
+        self.assert_code("review_lenses_incomplete", e.import_review, self.root, lenses=["correctness"], task_id="value", search_root=self.search)
+        self.assert_code("review_not_requested", e.import_review, self.root, lenses=["correctness", "security", "style"], task_id="value", search_root=self.search)
+        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+        run = e.import_review(self.root, lenses=["security", "correctness"], task_id="value", search_root=self.search)
+        self.assertEqual(("FAIL", "REWORK", "imported"), (run["reviews"][-1]["verdict"], run["tasks"]["value"]["status"], run["review_requests"]["task:value"]["status"]))
+
+    def test_manual_review_of_a_workflow_task_is_refused(self):
+        self.reviewed_ready()
+        for verdict, evidence in (("PASS", PASS_EVIDENCE), ("FAIL", "Synthetic manual finding about the value.")):
+            with self.subTest(verdict=verdict):
+                self.assert_code("workflow_review_required", e.review, self.root, "fixture-reviewer", verdict, evidence, task_id="value")
         self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
 
     def test_lens_pass_with_one_line_evidence_is_refused(self):
@@ -312,6 +402,31 @@ class TriageTests(ControlFixture):
         blocked = e.rework(self.root, "value", "Synthetic third environment problem.", decision="environment")
         self.assertEqual(("BLOCKED", "support_budget"), (blocked["state"], blocked["blocker"]["code"]))
         self.assertIn("Two test-plan or environment rounds are exhausted", blocked["blocker"]["reason"])
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: the environment looks fine now.")
+
+    def test_budget_blocks_resume_only_after_rework_budget_authority(self):
+        self.begin()
+        self.implement()
+        for index in range(3):
+            if index:
+                self.redispatch(f"synthetic:{index}")
+            e.rework(self.root, "value", f"Synthetic code finding {index}.")
+        blocked = e.load(self.root)
+        self.assertEqual(("BLOCKED", "rework_budget", "value"), (blocked["state"], blocked["blocker"]["code"], blocked["blocker"]["task"]))
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: try once more.")
+        evidence = "Synthetic explicit authority for one more code-fix round of this fixture task."
+        self.assert_code("invalid_rework_budget", e.authorize, self.root, "rework-budget", "fixture-user", evidence, task="value", count=3)
+        self.assert_code("rework_budget_state", e.authorize, self.root, "rework-budget", "fixture-user", evidence, count=1)
+        (self.home / "budget.md").write_text(evidence + "\n")
+        granted = self.cli("authorize", "--run", self.root, "--scope", "rework-budget", "--task", "value", "--count", "1", "--actor", "fixture-user", "--evidence-file", self.home / "budget.md")
+        self.assertEqual(("code-fix", 1, blocked["blocker"]["at"]), tuple(granted["rework_budget_grants"][-1][key] for key in ("kind", "count", "blocker_at")))
+        self.assertEqual("IMPLEMENTING", e.resume(self.root, "Synthetic: explicit authority for one more round.")["state"])
+        self.assertEqual(3, e.rework_limits(e.load(self.root), "value")["code-fix"])
+        self.redispatch("synthetic:3")
+        again = e.rework(self.root, "value", "Synthetic code finding 3.")
+        self.assertEqual(("BLOCKED", "rework_budget"), (again["state"], again["blocker"]["code"]))
+        self.assertTrue(again["blocker"]["reason"].startswith("Three rework rounds exhausted"))
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: the earlier grant does not cover this block.")
 
     def test_requirements_and_human_decisions_block(self):
         self.begin()
@@ -355,6 +470,122 @@ class TriageTests(ControlFixture):
         self.assertEqual(("BLOCKED", "non_converging", 2), (blocked["state"], blocked["blocker"]["code"], blocked["tasks"]["value"]["rework_rounds"]))
         self.assertIn("(value.txt|wrong-value)", blocked["blocker"]["reason"])
         self.assertEqual(["value.txt|missing-newline", "value.txt|wrong-value"], blocked["reviews"][-1]["finding_keys"])
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: try the same fix again.")
+
+
+class CollectionTests(ControlFixture):
+    def test_dispatches_are_collected_while_blocked_and_revise_waits_for_manual_ones(self):
+        self.begin(multi_plan("other", "third"))
+        self.implement()
+        e.prepare_task(self.root, "other")
+        e.register_agent(self.root, "other", "fixture-writer-other", "unit-test", "synthetic:other")
+        self.write_value("other", "other\n", "other.txt")
+        e.prepare_task(self.root, "third")
+        third = e.register_agent(self.root, "third", via_workflow=True)["tasks"]["third"]["agent"]["dispatch_id"]
+        self.write_value("third", "third\n", "third.txt")
+        blocked = e.rework(self.root, "value", "The acceptance text contradicts the requirement.", decision="requirements")
+        self.assertEqual(("BLOCKED", "requirements_finding"), (blocked["state"], blocked["blocker"]["code"]))
+        self.assert_code("wrong_state", e.register_agent, self.root, "value", "fixture-writer-value", "unit-test", "synthetic:while-blocked")
+        self.assert_code("active_task", e.revise, self.root, "Synthetic revision while a manual dispatch is live.")
+        self.report("other")
+        Journal(self.search).agent("a0fixturethird1", worker_result(third))
+        collected = e.import_task_report(self.root, "third", search_root=self.search)
+        self.assertEqual(("BLOCKED", "REPORTED", "REPORTED"), (collected["state"], collected["tasks"]["other"]["status"], collected["tasks"]["third"]["status"]))
+        revised = e.revise(self.root, "The requirement is rewritten before any further work.")
+        self.assertEqual(("DISCOVERY", None, []), (revised["state"], revised["blocker"], revised["previous_versions"][-1]["open_workflow_dispatches"]))
+
+
+class AbandonTests(ControlFixture):
+    def test_abandoned_workflow_dispatch_records_the_journal_and_becomes_the_rework_baseline(self):
+        self.begin()
+        old = Journal(self.search, "wf_fixture-old")
+        old.failed("a0fixtureold01", "implement:value")
+        os.utime(old.path, (1_000_000_000, 1_000_000_000))
+        dispatch_id = self.workflow_dispatch()
+        Journal(self.search).failed("a0fixturefail01", "implement:value")
+        Journal(self.search).failed("a0fixtureother1", "implement:other")
+        run = e.abandon_task(self.root, "value", "The workflow agent failed and returned no result.")
+        owner = run["tasks"]["value"]
+        entry = owner["rework_history"][-1]
+        self.assertEqual(("REWORK", 1, "abandoned", "abandon", dispatch_id), (owner["status"], owner["support_rounds"], owner["agent"]["liveness"], entry["decision"], entry["abandoned_dispatch"]))
+        self.assertEqual((["a0fixturefail01"], False, str(self.search)), ([item["agent_id"] for item in entry["journal"]["failed"]], entry["journal"]["result_present"], entry["journal"]["host_root"]))
+        self.assertIn(f"workflow-agent:{RUN_ID}/a0fixturefail01", {item["actor"] for item in run["writer_history"]})
+        path = Path(owner["path"])
+        self.assertEqual("after\n", (path / "value.txt").read_text())
+        self.assertEqual(entry["baseline"]["content"], e.snapshot(run, "value")["content"])
+        (path / "value.txt").write_text("written after the abandonment\n")
+        self.assert_code("pre_dispatch_changes", e.register_agent, self.root, "value", via_workflow=True)
+        (path / "value.txt").write_text("after\n")
+        self.assertEqual("DISPATCHED", e.register_agent(self.root, "value", via_workflow=True)["tasks"]["value"]["status"])
+
+    def test_abandon_counts_support_rounds_works_while_blocked_and_stacks_blocks(self):
+        self.begin()
+        e.prepare_task(self.root, "value")
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:0")
+        first = self.cli("task-abandon", "--run", self.root, "--task", "value", "--reason", "The worker session ended without a result.")
+        self.assertEqual(("REWORK", 1, None), (first["tasks"]["value"]["status"], first["tasks"]["value"]["support_rounds"], first["tasks"]["value"]["rework_history"][-1]["journal"]))
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:1")
+        e.abandon_task(self.root, "value", "The worker lost its sandbox.")
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:2")
+        e.block(self.root, "Synthetic outage of the fixture host.")
+        stacked = e.abandon_task(self.root, "value", "The worker did not survive the outage.")
+        self.assertEqual(("BLOCKED", "support_budget", 3, None), (stacked["state"], stacked["blocker"]["code"], stacked["tasks"]["value"]["support_rounds"], stacked["blocker"]["previous"].get("code")))
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: try again.")
+        e.authorize(self.root, "rework-budget", "fixture-user", "Synthetic authority for one more support round of this task.", task="value", count=1)
+        self.assertEqual(("BLOCKED", None), (lambda run: (run["state"], run["blocker"].get("code")))(e.resume(self.root, "Synthetic: one more round is authorized.")))
+        self.assertEqual("IMPLEMENTING", e.resume(self.root, "Synthetic: the outage is over.")["state"])
+        self.assert_code("task_state", e.abandon_task, self.root, "value", "Nothing is dispatched now.")
+
+    def test_revise_archives_open_workflow_dispatches_but_not_manual_ones(self):
+        self.begin(multi_plan("other"))
+        e.prepare_task(self.root, "value")
+        e.register_agent(self.root, "value", via_workflow=True)
+        e.prepare_task(self.root, "other")
+        e.register_agent(self.root, "other", "fixture-writer-other", "unit-test", "synthetic:other")
+        self.assert_code("active_task", e.revise, self.root, "Synthetic revision with a live manual worker.")
+        e.abandon_task(self.root, "other", "Synthetic: the manual worker was stopped before the revision.")
+        revised = e.revise(self.root, "Synthetic revision; the workflow dispatch is archived.")
+        self.assertEqual(("DISCOVERY", ["value"], "DISPATCHED"), (revised["state"], revised["previous_versions"][-1]["open_workflow_dispatches"], revised["previous_versions"][-1]["tasks"]["value"]["status"]))
+
+
+class IntegratedDecisionTests(ControlFixture):
+    def test_integrated_requirements_and_human_decisions_block(self):
+        self.integrated()
+        human = e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "The integrated value needs a product decision.", decision="human")
+        self.assertEqual(("BLOCKED", "human_decision", None, "READY_TO_PUBLISH"), (human["state"], human["blocker"]["code"], human["blocker"]["task"], human["blocker"]["from"]))
+        self.assertEqual("READY_TO_PUBLISH", e.resume(self.root, "Synthetic: the fixture user decided.")["state"])
+        requirements = e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "The requirement contradicts the verification case.", decision="requirements")
+        self.assertEqual(("BLOCKED", "requirements_finding"), (requirements["state"], requirements["blocker"]["code"]))
+        self.assert_code("revision_required", e.resume, self.root, "Synthetic: resume is not the way out.")
+
+    def test_repeated_integrated_finding_blocks_as_non_converging(self):
+        self.integrated()
+        first = e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding: the release marker is missing.", finding_keys=["value.txt|missing-marker"])
+        self.assertEqual(("READY_TO_PUBLISH", first["spec_version"]), (first["state"], first["reviews"][-1]["spec_version"]))
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the release marker.")["integration_fix"]
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"] + " observed"})
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        blocked = e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic: the release marker is still missing.", finding_keys=["value.txt|missing-marker", "value.txt|other"])
+        self.assertEqual(("BLOCKED", "non_converging", None), (blocked["state"], blocked["blocker"]["code"], blocked["blocker"]["task"]))
+        self.assertIn("(value.txt|missing-marker)", blocked["blocker"]["reason"])
+        self.assert_code("rework_budget_required", e.resume, self.root, "Synthetic: try the same fix again.")
+        self.assert_code("rework_budget_state", e.authorize, self.root, "rework-budget", "fixture-user", "Synthetic authority naming the wrong target.", task="value", count=1)
+        e.authorize(self.root, "rework-budget", "fixture-user", "Synthetic authority for one more integration-fix round.", count=1)
+        self.assertEqual(("VERIFYING", {"used": 1, "limit": 3}), (lambda run: (run["state"], e.fix_budget(run)))(e.resume(self.root, "Synthetic: one more fix round is authorized.")))
+
+    def test_integrated_finding_of_an_earlier_plan_version_does_not_count(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding: the release marker is missing.", finding_keys=["value.txt|missing-marker"])
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the release marker.")["integration_fix"]
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"] + " observed"})
+        e.revise(self.root, "Synthetic revision: the marker requirement moves into the plan.")
+        self.begin()
+        self.implement()
+        self.verify()
+        e.integrate(self.root)
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        again = e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic: the marker is missing in the new version too.", finding_keys=["value.txt|missing-marker"])
+        self.assertEqual(("VERIFYING", 2), (again["state"], again["reviews"][-1]["spec_version"]))
 
 
 class EvidenceTests(ControlFixture):
@@ -370,7 +601,9 @@ class EvidenceTests(ControlFixture):
 
 class OracleTests(unittest.TestCase):
     def test_weak_oracles_are_refused(self):
-        weak = [("requirements", "Exit 0."), ("gate", "passes"), ("gate", "File looks right."), ("verification", "All tests pass ."), ("verification", "Tests are  green .")]
+        weak = [("requirements", "Exit 0."), ("gate", "passes"), ("gate", "File correct."), ("verification", "All tests pass ."), ("verification", "Tests are  green ."),
+                ("gate", "Exit code is 0."), ("requirements", "HTTP status is 200"), ("verification", "All the tests pass."), ("gate", "Returns 200."),
+                ("gate", "The service returns 200 OK.")]
         for where, value in weak:
             with self.subTest(where=where, oracle=value):
                 candidate = plan()
@@ -379,9 +612,11 @@ class OracleTests(unittest.TestCase):
                 with self.assertRaises(e.RunError) as caught:
                     e.validate_plan(candidate)
                 self.assertEqual("weak_oracle", caught.exception.code)
-        candidate = plan()
-        candidate["verification"][0]["oracle"] = "value.txt reads after plus newline."
-        self.assertTrue(e.validate_plan(candidate))
+        for value in ("value.txt reads after plus newline.", "Prints hello world", "The command exits 0 and prints the version."):
+            with self.subTest(accepted=value):
+                candidate = plan()
+                candidate["verification"][0]["oracle"] = value
+                self.assertTrue(e.validate_plan(candidate))
 
 
 class StandingApprovalTests(ControlFixture):
@@ -461,6 +696,11 @@ class WorkflowJournalTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="workflow-journal-test-")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name).resolve()
+        host = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.home / "host")})
+        host.start()
+        self.addCleanup(host.stop)
+        self.home = self.home / "host"
+        self.home.mkdir()
 
     def test_invalid_lines_are_skipped_and_hashes_bind_line_and_transcript(self):
         journal = Journal(self.home)
@@ -489,6 +729,21 @@ class WorkflowJournalTests(unittest.TestCase):
         with self.assertRaises(e.RunError) as caught:
             wj.find_results(lambda result: True, search_root=self.home / "bad")
         self.assertEqual("journal_identity", caught.exception.code)
+
+    def test_host_root_confines_search_roots_and_named_journals(self):
+        outside = Journal(self.home.parent / "outside")
+        outside.agent(IMPLEMENTER, {"dispatch_id": "d1"})
+        for kwargs in ({"search_root": self.home.parent / "outside"}, {"journal": outside.path}, {"search_root": self.home.parent}):
+            with self.subTest(**{key: str(value) for key, value in kwargs.items()}), self.assertRaises(e.RunError) as caught:
+                wj.find_results(lambda result: True, **kwargs)
+            self.assertEqual("journal_outside_host", caught.exception.code)
+        (self.home / "escape").symlink_to(outside.dir.parents[3], target_is_directory=True)
+        with self.assertRaises(e.RunError) as caught:
+            wj.find_results(lambda result: True, journal=self.home / "escape" / "fixture-session" / "subagents" / "workflows" / RUN_ID / "journal.jsonl")
+        self.assertEqual("journal_outside_host", caught.exception.code)
+        inside = Journal(self.home)
+        inside.agent(IMPLEMENTER, {"dispatch_id": "d1"})
+        self.assertEqual([str(self.home)], [item["host_root"] for item in wj.find_results(lambda result: True, journal=inside.path)])
 
 
 if __name__ == "__main__":

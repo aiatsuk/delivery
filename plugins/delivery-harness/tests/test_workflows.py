@@ -1,12 +1,22 @@
-"""Shipped workflow scripts run under node with scripted agents; the engine-side import is tested elsewhere."""
+"""Shipped workflow scripts run under node with scripted agents, alone and end to end with the engine.
+
+The scripted agents and the host journal written from their results are synthetic unit-test
+artifacts under temporary directories; they do not prove that a host workflow ran.
+"""
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
+
+from tests.test_run_engine import RunFixture, SCRIPTS, e, git
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / "skills/delivery/workflows"
@@ -40,14 +50,18 @@ def verdict(token, value="PASS"):
     return {"review_token": token, "verdict": value, "evidence": EVIDENCE, "defects": []}
 
 
+def run_workflow(name, flow_args, responses):
+    with tempfile.TemporaryDirectory() as tmp:
+        scenario = Path(tmp) / "scenario.json"
+        scenario.write_text(json.dumps({"args": flow_args, "responses": responses}))
+        proc = subprocess.run([NODE, str(HARNESS), str(WORKFLOWS / f"{name}.js"), str(scenario)], capture_output=True, text=True, timeout=60)
+    return json.loads(proc.stdout)
+
+
 @unittest.skipUnless(NODE, "node is required to run workflow scripts")
 class WorkflowScriptTests(unittest.TestCase):
     def run_flow(self, name, flow_args, responses):
-        with tempfile.TemporaryDirectory() as tmp:
-            scenario = Path(tmp) / "scenario.json"
-            scenario.write_text(json.dumps({"args": flow_args, "responses": responses}))
-            proc = subprocess.run([NODE, str(HARNESS), str(WORKFLOWS / f"{name}.js"), str(scenario)], capture_output=True, text=True, timeout=60)
-        out = json.loads(proc.stdout)
+        out = run_workflow(name, flow_args, responses)
         self.assertNotIn("error", out, out.get("error"))
         self.assertEqual(out["unknownPhases"], [])
         self.assertEqual(out["meta"]["name"], name)
@@ -114,6 +128,79 @@ class WorkflowScriptTests(unittest.TestCase):
     def test_integrated_target_is_labelled(self):
         out = self.run_flow("delivery-review", review_args("conformance", task=None), {"review:integrated:conformance": [verdict("review-conformance")]})
         self.assertIn("the integrated diff", out["calls"][0]["prompt"])
+
+
+@unittest.skipUnless(NODE, "node is required to run workflow scripts")
+class WorkflowEndToEndTests(RunFixture):
+    """The shipped scripts' agent results, written as a host journal, drive the real engine through its CLI."""
+
+    def setUp(self):
+        super().setUp()
+        self.host = self.home / "host-projects"
+        self.host.mkdir()
+        environment = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.host)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def cli(self, *arguments):
+        result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "delivery.py"), *map(str, arguments)], cwd=self.home, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)["result"]
+
+    def flow(self, name, flow_args, responses):
+        out = run_workflow(name, flow_args, {label: [value] for label, value in responses.items()})
+        self.assertNotIn("error", out, out.get("error"))
+        self.assertEqual(sorted(responses), sorted(call["label"] for call in out["calls"]))
+        return out
+
+    def journal(self, run_id, out, responses):
+        """Write what the host records for these agent calls: a started and a result line per label, plus a transcript."""
+        directory = self.host / "fixture-project" / "fixture-session" / "subagents" / "workflows" / run_id
+        directory.mkdir(parents=True)
+        lines = [{"type": "launched"}]
+        for call in out["calls"]:
+            agent = "a" + hashlib.sha256(call["label"].encode()).hexdigest()[:16]
+            key = "v2:" + hashlib.sha256((run_id + call["label"]).encode()).hexdigest()[:16]
+            lines += [{"type": "started", "key": key, "agentId": agent, "label": call["label"], "phase": call["phase"]},
+                      {"type": "result", "key": key, "agentId": agent, "result": responses[call["label"]]}]
+            (directory / f"agent-{agent}.jsonl").write_text(json.dumps({"type": "fixture transcript", "prompt": call["prompt"]}) + "\n")
+        (directory / "journal.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+    def test_shipped_workflows_drive_a_registered_task_to_verified(self):
+        self.begin()
+        self.cli("task-prepare", "--run", self.root, "--task", "value")
+        dispatch_id = self.cli("task-register", "--run", self.root, "--task", "value", "--via-workflow")["tasks"]["value"]["agent"]["dispatch_id"]
+        contract_path = self.root / "tasks" / "value.json"
+        contract = json.loads(contract_path.read_text())
+        task = contract["task"]
+        target = {"task": "value", "worktree": contract["worktree"], "brief": str(contract_path), "acceptance": task["acceptance"], "gates": task["gates"]}
+        # The scripted implementation agent does its work in the real worktree and reports the staged tree.
+        worktree = Path(contract["worktree"])
+        (worktree / "value.txt").write_text("after\n")
+        git(worktree, "add", "--", "value.txt")
+        report = {"dispatch_id": dispatch_id, "summary": "Set value.txt to the planned text.", "limitations": ["Scripted fixture agent."],
+                  "tests": [{"command": task["gates"][0]["command"], "exit_code": 0, "outcome": "The planned fixture assertion passed."}],
+                  "tree": git(worktree, "write-tree")}
+        implemented = self.flow("delivery-implement", {"run_root": str(self.root), "tasks": [{**target, "dispatch_id": dispatch_id, "branch": contract["branch"], "paths": task["paths"]}]},
+                                {"implement:value": report})
+        self.assertEqual([True], [item["returned"] for item in implemented["result"]["tasks"]])
+        self.assertIn(f"dispatch_id must be exactly {dispatch_id}", implemented["calls"][0]["prompt"])
+        self.journal("wf_e2e-implement", implemented, {"implement:value": report})
+        imported = self.cli("task-import", "--run", self.root, "--task", "value")
+        self.assertEqual(("REPORTED", report["tree"]), (imported["tasks"]["value"]["status"], imported["tasks"]["value"]["report"]["tree"]))
+        self.assertTrue(self.cli("gate", "--run", self.root, "--task", "value")["passed"])
+        tokens = {name: self.cli("review-token", "--run", self.root, "--task", "value", "--lens", name)["token"] for name in ("conformance", "adversary")}
+        verdicts = {f"review:value:{name}": verdict(token) for name, token in tokens.items()}
+        reviewed = self.flow("delivery-review", {"run_root": str(self.root), "targets": [{**target, "base_sha": imported["tasks"]["value"]["base_sha"],
+                                                                                          "lenses": [{"lens": name, "token": token} for name, token in tokens.items()]}]}, verdicts)
+        self.assertEqual([True, True], [item["returned"] for item in reviewed["result"]["reviews"]])
+        self.journal("wf_e2e-review", reviewed, verdicts)
+        verified = self.cli("review-import", "--run", self.root, "--task", "value", "--lens", "conformance", "--lens", "adversary")
+        self.assertEqual("VERIFIED", verified["tasks"]["value"]["status"])
+        receipt = verified["reviews"][-1]
+        self.assertEqual(("PASS", ["conformance", "adversary"]), (receipt["verdict"], receipt["lenses"]))
+        self.assertEqual(2, len(set(receipt["reviewers"])))
+        self.assertNotIn(verified["tasks"]["value"]["agent"]["actor"], receipt["reviewers"])
 
 
 if __name__ == "__main__":
