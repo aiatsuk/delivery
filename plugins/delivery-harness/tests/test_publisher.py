@@ -16,7 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 import publisher as p
 import product
 import run_engine as e
-from tests.test_run_engine import RunFixture, git, plan, gate
+from tests.test_run_engine import PASS_EVIDENCE, RunFixture, git, plan, gate
 
 
 class FakeGitHub:
@@ -146,7 +146,7 @@ class PublisherFixture(RunFixture):
 
     def reverify(self):
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-after-rebase-reviewer", "PASS", "Synthetic review after the base refresh.")
+        e.review(self.root, "fixture-after-rebase-reviewer", "PASS", PASS_EVIDENCE)
         return e.ready(self.root)
 
 
@@ -158,7 +158,7 @@ class PublisherTests(PublisherFixture):
         self.verify()
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "PASS", "Synthetic review.")
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
         before = e.ready(self.root)
         result = p.commit(self.root, "Update the value", expected_revision=before["revision"])
         self.assertNotEqual(before["validated"]["head"], result["commit"]["head"])
