@@ -42,15 +42,6 @@ def _within(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-def _has_symlink(path: Path, stop: Path) -> bool:
-    current = path
-    while current != stop and current != current.parent:
-        if current.is_symlink():
-            return True
-        current = current.parent
-    return False
-
-
 def _named(journal, host: Path) -> Path:
     e = _engine()
     path = Path(os.path.abspath(Path(journal).expanduser()))
@@ -71,47 +62,106 @@ def _named(journal, host: Path) -> Path:
 
 def check_location(journal, search_root, host) -> None:
     """Apply the named-journal and search-root rules without reading any result."""
-    _journals(journal, search_root, Path(host).resolve())
+    _location(journal, search_root, Path(host).resolve())
 
 
-def _search(root: Path) -> list[Path]:
-    # A search never follows a symlinked project, session, run directory or journal: such
-    # paths are skipped, so they can neither supply a result nor break unrelated imports.
-    return [path for path in sorted(root.glob(PATTERN)) if not _has_symlink(path, root)]
+# Tolerated per line: a partial write, invalid bytes, a nesting too deep to decode, an unexpected shape.
+LINE_ERRORS = (ValueError, RecursionError, TypeError, UnicodeError, KeyError, AttributeError)
+LEVELS = ("*", "*", "subagents", "workflows", "wf_*")
 
 
-def _journals(journal, search_root, host: Path) -> list[Path]:
+def _unreadable(problems: list | None, path: Path, exc: OSError) -> None:
+    e = _engine()
+    detail = {"path": str(path), "error": f"{type(exc).__name__}: {exc.strerror or exc}"}
+    e.require(problems is not None, "journal_unreadable", f"A workflow journal path under the host root could not be read: {detail['path']} ({detail['error']}).")
+    problems.append(detail)
+
+
+def _search(root: Path, problems: list | None = None, skipped: list | None = None) -> list[Path]:
+    """Journals at <root>/*/*/subagents/workflows/wf_*/journal.jsonl, never through a symlink.
+
+    A symlinked project, session, run directory or journal is skipped (and listed in ``skipped``):
+    it can neither supply a result nor break unrelated imports. A directory that cannot be listed
+    is reported in ``problems``, or refused (journal_unreadable) when no list is given, so an
+    unreadable part of the root never silently hides a result.
+    """
+    directories = [root]
+    for level in LEVELS:
+        following = []
+        for directory in directories:
+            try:
+                with os.scandir(directory) as listing:
+                    entries = sorted(listing, key=lambda item: item.name)
+            except OSError as exc:
+                _unreadable(problems, directory, exc)
+                continue
+            for entry in entries:
+                if level != "*" and not (entry.name.startswith("wf_") if level == "wf_*" else entry.name == level):
+                    continue
+                if entry.is_symlink():
+                    if skipped is not None:
+                        skipped.append(entry.path)
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    following.append(Path(entry.path))
+        directories = following
+    journals = []
+    for directory in directories:
+        journal = directory / "journal.jsonl"
+        if journal.is_symlink():
+            if skipped is not None:
+                skipped.append(str(journal))
+        elif journal.is_file():
+            journals.append(journal)
+    return journals
+
+
+def _location(journal, search_root, host: Path) -> Path | None:
     e = _engine()
     if journal is not None:
-        return [_named(journal, host)]
+        return _named(journal, host)
     if search_root is not None:
         root = Path(search_root).expanduser().resolve()
         e.require(_within(root, host), "journal_outside_host", f"A journal search root must be the host projects root {host}.")
         e.require(root == host, "search_root_mismatch", f"A journal search covers the whole host projects root {host}; a narrower search root could hide a second result.")
     e.require(host.is_dir(), "journal_missing", "The workflow host projects root is not a directory.")
-    return _search(host)
+    return None
 
 
-def _entries(path: Path):
-    for line in path.read_bytes().split(b"\n"):
+def _read(path: Path, problems: list | None) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        _unreadable(problems, path, exc)
+        return None
+
+
+def _entries(raw: bytes):
+    for line in raw.split(b"\n"):
         if not line.strip():
             continue
         try:
             entry = json.loads(line)
-        except ValueError:
+        except LINE_ERRORS:
             continue
         if isinstance(entry, dict):
             yield line, entry
 
 
-def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = True, rejected: list | None = None) -> list[dict]:
+def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = True, rejected: list | None = None, problems: list | None = None) -> list[dict]:
     e = _engine()
+    raw = _read(path, problems)
+    if raw is None:
+        return []
     started, found = {}, []
-    for line, entry in _entries(path):
-        key, agent = entry.get("key"), entry.get("agentId")
-        if entry.get("type") == "started" and isinstance(key, str) and isinstance(agent, str):
-            started.setdefault((key, agent), entry)
-        if entry.get("type") != "result" or not isinstance(entry.get("result"), dict) or not match(entry["result"]):
+    for line, entry in _entries(raw):
+        try:
+            key, agent, result = entry.get("key"), entry.get("agentId"), entry.get("result")
+            if entry.get("type") == "started" and isinstance(key, str) and isinstance(agent, str):
+                started.setdefault((key, agent), entry)
+            if entry.get("type") != "result" or not isinstance(result, dict) or not match(result):
+                continue
+        except LINE_ERRORS:
             continue
         try:
             found.append(_checked(path, line, entry, started, host))
@@ -121,7 +171,7 @@ def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = T
                 raise
             if rejected is not None:
                 rejected.append({"journal": str(path), "line_sha256": hashlib.sha256(line).hexdigest(), "code": exc.code, "message": exc.message,
-                                 "agent_id": entry.get("agentId"), "result": entry["result"]})
+                                 "agent_id": agent, "result": result})
     return found
 
 
@@ -141,20 +191,24 @@ def _checked(path: Path, line: bytes, entry: dict, started: dict, host: Path) ->
             "transcript_sha256": hashlib.sha256(transcript.read_bytes()).hexdigest(), "host_root": str(host)}
 
 
-def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None, host=None, strict=True, rejected: list | None = None) -> list[dict]:
+def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None, host=None, strict=True, rejected: list | None = None,
+                 problems: list | None = None, skipped: list | None = None) -> list[dict]:
     """Return every matching agent result with its journal line and transcript hashes.
 
     ``host`` is the run's recorded host root (default: the effective one). With a named journal
     the whole host root is scanned too, so another matching result elsewhere is returned as well
     and the caller sees it instead of a hand-picked journal. ``strict=False`` skips results with
     incomplete provenance instead of refusing them, listing them in ``rejected`` when given.
+    Unreadable directories or journals are listed in ``problems`` when given and refused
+    (journal_unreadable) otherwise; symlinked paths are skipped and listed in ``skipped``.
     """
     host = Path(host).resolve() if host is not None else host_root()
-    paths = _journals(journal, search_root, host)
-    found = [item for path in paths for item in _scan(path, match, host, strict, rejected)]
-    if journal is not None and host.is_dir():
+    named = _location(journal, search_root, host)
+    found = _scan(named, match, host, strict, rejected, problems) if named is not None else []
+    if host.is_dir():
         seen = {(item["journal"], item["line_sha256"]) for item in found}
-        found += [item for path in _search(host) for item in _scan(path, match, host, strict) if (item["journal"], item["line_sha256"]) not in seen]
+        found += [item for path in _search(host, problems, skipped) for item in _scan(path, match, host, strict, rejected if named is None else None, problems)
+                  if (item["journal"], item["line_sha256"]) not in seen]
     return found
 
 
@@ -167,17 +221,29 @@ def observe_dispatch(label: str, dispatch_id: str, *, since: float | None = None
     """
     host = Path(host).resolve() if host is not None else host_root()
     failed, results = [], []
-    for path in (_search(host) if host.is_dir() else []):
-        if since is not None and path.stat().st_mtime < since:
+    problems = []
+    for path in (_search(host, problems) if host.is_dir() else []):
+        try:
+            if since is not None and path.stat().st_mtime < since:
+                continue
+        except OSError as exc:
+            _unreadable(problems, path, exc)
             continue
+        raw = _read(path, problems)
         labels = {}
-        for line, entry in _entries(path):
-            key, agent = entry.get("key"), entry.get("agentId")
-            if entry.get("type") == "started" and isinstance(key, str) and isinstance(agent, str):
-                labels.setdefault((key, agent), entry.get("label"))
-            record = {"journal": str(path), "run_id": path.parent.name, "agent_id": agent, "key": key, "line_sha256": hashlib.sha256(line).hexdigest()}
-            if entry.get("type") == "failed" and (entry.get("label") or labels.get((key, agent))) == label:
-                failed.append({**record, "label": label})
-            if entry.get("type") == "result" and isinstance(entry.get("result"), dict) and entry["result"].get("dispatch_id") == dispatch_id:
-                results.append(record)
-    return {"host_root": str(host), "label": label, "failed": failed, "results": results, "result_present": bool(results)}
+        for line, entry in _entries(raw or b""):
+            try:
+                key, agent = entry.get("key"), entry.get("agentId")
+                if not (isinstance(key, str) and isinstance(agent, str)):
+                    continue
+                if entry.get("type") == "started":
+                    labels.setdefault((key, agent), entry.get("label"))
+                record = {"journal": str(path), "run_id": path.parent.name, "agent_id": agent, "key": key, "line_sha256": hashlib.sha256(line).hexdigest()}
+                if entry.get("type") == "failed" and (entry.get("label") or labels.get((key, agent))) == label:
+                    failed.append({**record, "label": label})
+                result = entry.get("result")
+                if entry.get("type") == "result" and isinstance(result, dict) and isinstance(result.get("dispatch_id"), str) and result["dispatch_id"] == dispatch_id:
+                    results.append(record)
+            except LINE_ERRORS:
+                continue
+    return {"host_root": str(host), "label": label, "failed": failed, "results": results, "result_present": bool(results), "unreadable": problems}
