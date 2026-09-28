@@ -52,10 +52,13 @@ dispatch for an authorized retry. Never reuse a prior report as its new result.
 
 ### Workflow dispatch and review (preferred on Claude Code)
 
-The plug-in ships two workflow scripts under `workflows/` (declared in the Claude
-manifest, so they also run as `/delivery-harness:delivery-implement` and
-`/delivery-harness:delivery-review`). Launch them with the `Workflow` tool and the
-script's real path, passing `args` as a JSON object:
+The plug-in ships two workflow scripts under `workflows/`. Launch them with the
+`Workflow` tool by name, passing `args` as a JSON object: `delivery-harness:delivery-implement`
+and `delivery-harness:delivery-review` when the plug-in is installed (the Claude manifest
+declares them), or `delivery-implement` and `delivery-review` when the scripts were copied
+into `~/.claude/workflows/` for the global-skill installation. A launch by `scriptPath` works
+only when the skill directory is readable from the session; a session started elsewhere is
+refused. Saved workflows load when a session starts.
 
 1. `task-prepare --task T` as usual, then `task-register --task T --via-workflow`
    records a pending dispatch without any typed identity; read its `dispatch_id` from
