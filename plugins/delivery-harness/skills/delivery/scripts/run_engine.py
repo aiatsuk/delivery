@@ -177,11 +177,13 @@ def transaction(root: str | Path, event: str, expected_revision: int | None = No
             require(value["revision"] == expected_revision, "stale_revision", "Reload the run; another writer changed it.")
         require(value["state"] not in TERMINAL, "terminal_run", "This run has ended.")
         # Harvest returned review verdicts first and persist them on their own, so a command that
-        # then refuses (for example ready after a late FAIL) never loses what was harvested.
-        if harvest_reviews(value):
+        # then refuses (for example ready after a late FAIL) never loses what was harvested. A
+        # harvest problem never stops the command here; release commands check the harvest record.
+        outcome = harvest_reviews(value)
+        if outcome:
             value["revision"] += 1
             value["updated_at"] = now()
-            value["history"].append({"revision": value["revision"], "at": value["updated_at"], "event": "reviews_harvested", "state": value["state"]})
+            value["history"].append({"revision": value["revision"], "at": value["updated_at"], "state": value["state"], **outcome})
             atomic_json(root / "run.json", value)
         yield value
         value["revision"] += 1
@@ -874,7 +876,11 @@ def register_agent(root, task_id: str, actor: str | None = None, host: str | Non
 
 def validate_report(result: dict) -> None:
     require(isinstance(result, dict), "invalid_report", "A report is a JSON object.")
-    require(len(json.dumps(result, ensure_ascii=False)) <= 100_000, "report_limit", "Keep the report bounded; link detailed external evidence.")
+    try:
+        size = len(json.dumps(result, ensure_ascii=False))
+    except (ValueError, RecursionError, TypeError) as exc:
+        raise RunError("invalid_report", "The report cannot be serialized; return plain JSON.") from exc
+    require(size <= 100_000, "report_limit", "Keep the report bounded; link detailed external evidence.")
     text(result.get("summary"), "summary")
     text(result.get("source_event"), "source_event")
     tests = result.get("tests")
@@ -967,7 +973,8 @@ def import_task_report(root, task_id: str, *, journal=None, search_root=None, ex
     agent = (owner or {}).get("agent") or {}
     require(owner and owner["status"] == "DISPATCHED" and agent.get("via_workflow"), "not_workflow_dispatch", "Only a dispatched task registered with --via-workflow imports its result from a workflow journal.")
     dispatch_id = agent["dispatch_id"]
-    matches = workflow_journal.find_results(lambda result: result.get("dispatch_id") == dispatch_id, journal=journal, search_root=search_root, host=host)
+    matches = workflow_journal.find_results(lambda result: isinstance(result.get("dispatch_id"), str) and result["dispatch_id"] == dispatch_id,
+                                            journal=journal, search_root=search_root, host=host)
     require(matches, "journal_result_missing", "No workflow journal result names this dispatch_id; wait for the actual return or query the host.")
     require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results name this dispatch_id; select the exact journal after inspecting them.")
     found = matches[0]
@@ -1369,6 +1376,27 @@ def _usable_defects(defects: Any) -> bool:
     return isinstance(defects, list) and all(isinstance(d, dict) and all(isinstance(d[k], str) for k in ("file", "kind") if k in d) for d in defects)
 
 
+def _storable(verdict: dict) -> dict:
+    """Keep a harvested verdict storable: evidence as text and defects as flat scalar fields."""
+    evidence = verdict.get("evidence")
+    if not isinstance(evidence, str):
+        try:
+            evidence = json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=False)
+        except (ValueError, RecursionError, TypeError):
+            evidence = "(the reviewer's evidence could not be stored)"
+    defects = [{key: defect[key] for key in ("file", "line", "kind", "severity", "summary", "scenario")
+                if isinstance(defect.get(key), (str, int)) and not isinstance(defect.get(key), bool)}
+               for defect in verdict.get("defects") or [] if isinstance(defect, dict)]
+    return {**verdict, "evidence": evidence[:20_000], "defects": defects}
+
+
+def _unreadable_verdict(result: dict, item: dict) -> dict:
+    verdict = result.get("verdict")
+    if isinstance(verdict, str) and verdict.strip().upper() == "FAIL":
+        return {**item, **_normalized_fail({"evidence": "(the reviewer's FAIL could not be read in full)", "defects": None})}
+    return {**item, "verdict": verdict if isinstance(verdict, str) else None, "refused": "The verdict could not be read in full.", "refused_code": "unreadable_verdict"}
+
+
 def _normalized_fail(result: dict) -> dict:
     evidence, defects, normalized = result.get("evidence"), result.get("defects"), []
     if not ((isinstance(evidence, str) and evidence.strip()) or (isinstance(evidence, dict) and evidence)):
@@ -1393,29 +1421,63 @@ def _tracked_tokens(run: dict) -> dict:
     return tokens
 
 
-def harvest_reviews(run: dict) -> bool:
+def harvest_reviews(run: dict) -> dict | None:
     """Record every countable verdict returned for any issued review token, then apply late FAILs.
 
     Runs at the start of every mutating command. Each new verdict becomes a receipt in
     ``harvested_reviews`` bound to the content and base its token was issued for. A result with
     incomplete provenance counts when it is a FAIL and is refused when it is a PASS (fail closed);
-    verdicts from implementation actors and invalid PASS results are refused. Never raises: a
-    harvest that cannot complete leaves the run unchanged and is retried by the next command.
+    verdicts from implementation actors and invalid PASS results are refused.
+
+    The outcome is kept in ``run["harvest"]``: whether the harvest was complete, the reason when it
+    was not, the journals or directories that could not be read, and the workflow paths skipped
+    because they are symlinks (not refused: forging one needs write access to the host root). It
+    never raises; a failed harvest leaves the verdicts as they were, and release commands refuse
+    while the record is incomplete. Returns the history entry to persist, or None.
     """
-    if not _tracked_tokens(run):
-        return False
-    candidate = copy.deepcopy(run)
     try:
-        changed = _harvest(candidate) | _apply_late_failures(candidate)
-    except (RunError, git_ops.GitError, OSError):
-        return False
-    if changed:
+        if not _tracked_tokens(run):
+            return None
+    except Exception as exc:  # noqa: BLE001 - a harvest problem must never stop the command
+        return _harvest_record(run, None, [], [], exc)
+    candidate = copy.deepcopy(run)
+    problems, skipped = [], []
+    try:
+        changed = _harvest(candidate, problems, skipped)
+        changed = _apply_late_failures(candidate) or changed
+    except Exception as exc:  # noqa: BLE001 - a harvest problem must never stop the command
+        return _harvest_record(run, None, problems, skipped, exc)
+    return _harvest_record(run, candidate if changed else None, problems, skipped, None)
+
+
+def _harvest_record(run: dict, harvested: dict | None, problems: list, skipped: list, error: Exception | None) -> dict | None:
+    if harvested is not None:
         run.clear()
-        run.update(candidate)
-    return changed
+        run.update(harvested)
+    reason = f"{type(error).__name__}: {error}"[:2000] if error else ("Some workflow journals or directories under the host root could not be read." if problems else None)
+    record = {"complete": reason is None, "reason": reason, "unreadable": problems, "symlinks_skipped": sorted(set(skipped))}
+    previous = dict(run.get("harvest") or {})
+    unchanged = {key: value for key, value in previous.items() if key != "at"} == record
+    run["harvest"] = {**record, "at": previous.get("at") if unchanged else now()}
+    if not record["complete"] and not unchanged:
+        return {"event": "harvest_incomplete", "reason": reason, "paths": [item["path"] for item in problems]}
+    if harvested is not None or not unchanged:
+        return {"event": "reviews_harvested"}
+    return None
 
 
-def _harvest(run: dict) -> bool:
+def require_complete_harvest(run: dict) -> None:
+    """Release and review import read every verdict: an incomplete harvest could hide a late FAIL."""
+    if not _tracked_tokens(run):
+        return
+    record = run.get("harvest") or {}
+    paths = [item["path"] for item in record.get("unreadable", [])]
+    require(record.get("complete"), "harvest_incomplete",
+            f"The review harvest is incomplete ({record.get('reason') or 'no complete harvest recorded'}"
+            + (f"; unreadable: {', '.join(paths)}" if paths else "") + "); restore read access to the host root and retry.")
+
+
+def _harvest(run: dict, problems: list, skipped: list) -> bool:
     import workflow_journal
     tokens = _tracked_tokens(run)
     host = run.get("workflow_host_root") or str(workflow_journal.host_root())
@@ -1425,7 +1487,8 @@ def _harvest(run: dict) -> bool:
     refused = run.setdefault("refused_review_events", {})
     refused_before = len(refused)
     rejected = []
-    found = workflow_journal.find_results(lambda result: result.get("review_token") in tokens, host=host, strict=False, rejected=rejected)
+    found = workflow_journal.find_results(lambda result: isinstance(result.get("review_token"), str) and result["review_token"] in tokens,
+                                          host=host, strict=False, rejected=rejected, problems=problems, skipped=skipped)
     writers = _writer_agents(run)
     receipts = []
     for item in found:
@@ -1433,7 +1496,11 @@ def _harvest(run: dict) -> bool:
         if line in accepted or line in refused:
             continue
         info = tokens[item["result"]["review_token"]]
-        verdict = _classify_verdict(info["lens"], item, writers)
+        try:
+            verdict = _classify_verdict(info["lens"], item, writers)
+        except workflow_journal.LINE_ERRORS:
+            # A result too odd to read in full still counts when it is a FAIL.
+            verdict = _unreadable_verdict(item["result"], {"lens": info["lens"], "actor": f"workflow-agent:{item['run_id']}/{item['agent_id']}", "journal": _journal_evidence(item)})
         if "refused" in verdict:
             refused[line] = {"token": item["result"]["review_token"], "task": info["target"], "lens": info["lens"], "actor": verdict["actor"],
                              "verdict": verdict["verdict"], "reason": verdict["refused"], "code": verdict["refused_code"], "line_sha256": line, "at": now()}
@@ -1449,13 +1516,14 @@ def _harvest(run: dict) -> bool:
         base = {"lens": info["lens"], "actor": actor, "agent_id": agent or actor, "unverified": True,
                 "journal": {"path": item["journal"], "line_sha256": line, "code": item["code"], "message": item["message"]}}
         is_writer = agent is not None and agent in writers[1]
-        if str(result.get("verdict", "")).strip().upper() == "FAIL" and not is_writer:
+        if isinstance(result.get("verdict"), str) and result["verdict"].strip().upper() == "FAIL" and not is_writer:
             receipts.append((line, result["review_token"], info, {**base, **_normalized_fail(result)}))
             continue
-        refused[line] = {"token": result["review_token"], "task": info["target"], "lens": info["lens"], "actor": actor, "verdict": result.get("verdict"),
+        refused[line] = {"token": result["review_token"], "task": info["target"], "lens": info["lens"], "actor": actor, "verdict": result.get("verdict") if isinstance(result.get("verdict"), str) else None,
                          "reason": "The reviewer is a current or previous implementation actor." if is_writer else f"A PASS with incomplete provenance does not count: {item['message']}",
                          "code": "writer_verdict" if is_writer else "unverified_pass", "line_sha256": line, "at": now()}
     for line, token, info, verdict in receipts:
+        verdict = _storable(verdict)
         receipt = {"id": line, "source": "harvested", "token": token, "request": info["request"],
                    "task": info["target"], "at": now(), "snapshot": {"content": info["content"], "base_sha": info["base_sha"]},
                    "plan_hash": info["plan_hash"], "spec_version": info["spec_version"], **verdict}
@@ -1516,7 +1584,8 @@ def _late_failure_effect(run: dict, receipt: dict) -> str:
 
 
 def assert_no_late_failures(run: dict) -> None:
-    """Release waits for every unoverridden FAIL on the current integration content, and for late FAILs on integrated tasks."""
+    """Release waits for a complete harvest, every unoverridden FAIL on the current integration content, and late FAILs on integrated tasks."""
+    require_complete_harvest(run)
     if not run.get("integration"):
         return
     snap = snapshot(run)
@@ -1542,7 +1611,7 @@ def _classify_verdict(lens: str, found: dict, writers: tuple[set, set]) -> dict:
     """
     result = found["result"]
     item = {"lens": lens, "actor": f"workflow-agent:{found['run_id']}/{found['agent_id']}", "journal": _journal_evidence(found)}
-    verdict = str(result.get("verdict", "")).strip().upper()
+    verdict = result.get("verdict").strip().upper() if isinstance(result.get("verdict"), str) else ""
     if item["actor"] in writers[0] or found["agent_id"] in writers[1]:
         return {**item, "verdict": result.get("verdict"), "refused": "The reviewer is a current or previous implementation actor.", "refused_code": "writer_verdict"}
     if verdict == "FAIL":
@@ -1585,6 +1654,7 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     with transaction(root, "independent_review_imported", expected_revision) as run:
         require(workflow_host(run) == host, "host_root_changed", "The run's workflow host root changed while the command started.")
         run.setdefault("workflow_host_root", host)
+        require_complete_harvest(run)
         request = _open_request(run, task_id)
         require(request, "review_not_requested", "No review-token request is open for the current content; request tokens with review-token first.")
         extra = sorted(set(lenses) - set(request["lenses"]))

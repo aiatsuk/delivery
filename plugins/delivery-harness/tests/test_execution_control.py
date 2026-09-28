@@ -1025,6 +1025,69 @@ class HarvestTests(ControlFixture):
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer", "PASS", PASS_EVIDENCE, task_id="value")
 
+    def odd_journal(self):
+        odd = Journal(self.search, "wf_fixture-0009", project="odd-project")
+        odd.line({"type": "started", "key": "k1", "agentId": "a0odd0000001", "label": "odd"})
+        odd.line({"type": "result", "key": "k1", "agentId": "a0odd0000001", "result": {"review_token": ["not", "a", "string"], "dispatch_id": {"nested": True}}})
+        odd.line("[" * 200000 + "]" * 200000)
+        odd.line('{"type": "result", "key": "k1", "agentId": "a0odd0000001", "result": ' + "{\"a\": " * 3000 + "1" + "}" * 3000 + "}")
+        with odd.path.open("ab") as out:
+            out.write(b"\xff\xfe{ not text\n")
+        (odd.dir / "agent-a0odd0000001.jsonl").write_text("{}\n")
+        return odd
+
+    def test_odd_lines_elsewhere_under_the_host_root_do_not_break_commands(self):
+        self.returned()
+        e.import_review(self.root, lenses=["conformance"], task_id="value")
+        self.odd_journal()
+        e.block(self.root, "Synthetic pause while odd journal lines exist.")
+        e.resume(self.root, "Synthetic: the pause is over.")
+        self.assertEqual("VERIFYING", e.integrate(self.root)["state"])
+        self.assertIs(True, e.load(self.root)["harvest"]["complete"])
+        self.assertEqual("DISCOVERY", e.revise(self.root, "Synthetic revision with odd journal lines around.")["state"])
+
+    def test_a_harvest_failure_never_stops_a_command_and_is_recorded(self):
+        self.returned()
+        with mock.patch.object(e, "_apply_late_failures", side_effect=RuntimeError("synthetic harvest failure")):
+            blocked = e.block(self.root, "Synthetic pause during a failing harvest.")
+            self.assertEqual("BLOCKED", blocked["state"])
+            self.assert_code("harvest_incomplete", e.import_review, self.root, lenses=["conformance"], task_id="value")
+        event = [entry for entry in blocked["history"] if entry["event"] == "harvest_incomplete"][-1]
+        self.assertIn("synthetic harvest failure", event["reason"])
+        e.resume(self.root, "Synthetic: the harvest works again.")
+        self.assertIs(True, e.load(self.root)["harvest"]["complete"])
+
+    def locked_fail(self, token):
+        locked = Journal(self.search, "wf_fixture-0010", project="locked-project")
+        locked.agent("a0fixturerev10", lens(token, "FAIL", "A late FAIL in a journal nobody can read.", [{"file": "value.txt", "kind": "behavior"}]))
+        locked.path.chmod(0)
+        self.addCleanup(locked.path.chmod, 0o644)
+        return locked
+
+    def test_an_unreadable_journal_makes_ready_and_review_import_refuse_until_it_is_readable(self):
+        self.integrated()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        locked = self.locked_fail(token)
+        refused = self.assert_code("harvest_incomplete", e.ready, self.root)
+        self.assertIn(str(locked.path), refused.message)
+        self.assert_code("harvest_incomplete", e.import_review, self.root, lenses=["integrated"])
+        e.authorize(self.root, "implement", "fixture-user", "Synthetic renewed authority while a journal is unreadable.")
+        e.block(self.root, "Synthetic pause while a journal is unreadable.")
+        self.assertEqual("READY_TO_PUBLISH", e.resume(self.root, "Synthetic: the pause is over.")["state"])
+        event = [entry for entry in e.load(self.root)["history"] if entry["event"] == "harvest_incomplete"][-1]
+        self.assertEqual([str(locked.path)], event["paths"])
+        locked.path.chmod(0o644)
+        self.assert_code("late_review_fail", e.ready, self.root)
+        self.assertEqual(["FAIL"], [item["verdict"] for item in self.harvested(token)])
+
+    def test_symlinked_workflow_paths_are_skipped_and_listed(self):
+        self.returned()
+        real = Journal(self.search / "deeper", "wf_fixture-0011")
+        (self.search / "linked-project").symlink_to(real.project, target_is_directory=True)
+        e.authorize(self.root, "implement", "fixture-user", "Synthetic renewed authority; every command harvests first.")
+        harvest = e.load(self.root)["harvest"]
+        self.assertEqual((True, [str(self.search / "linked-project")]), (harvest["complete"], harvest["symlinks_skipped"]))
+
     def test_review_tokens_are_issued_only_where_their_verdicts_can_be_imported(self):
         self.begin()
         e.prepare_task(self.root, "value")
@@ -1052,6 +1115,20 @@ class PublicationHarvestTests(PublisherFixture):
         self.assertEqual("VERIFYING", publisher.refresh(self.root, provider=self.provider)["state"])
 
 
+    def test_publish_and_merge_refuse_an_incomplete_harvest(self):
+        self.published()
+        self.grant_merge()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        locked = Journal(self.host_root, "wf_fixture-0010", project="locked-project")
+        locked.agent("a0fixturerev10", lens(token, "FAIL", "A late FAIL in a journal nobody can read."))
+        locked.path.chmod(0)
+        self.addCleanup(locked.path.chmod, 0o644)
+        self.assert_code("harvest_incomplete", publisher.publish, self.root, "Update the fixture value", "The value now reads after.", provider=self.provider)
+        self.assert_code("harvest_incomplete", publisher.merge, self.root, provider=self.provider)
+        locked.path.chmod(0o644)
+        self.assert_code("late_review_fail", publisher.merge, self.root, provider=self.provider)
+
+
 class LocalFinishHarvestTests(LocalFixture):
     def setUp(self):
         self.host_dir = tempfile.TemporaryDirectory(prefix="delivery-local-host-")
@@ -1071,6 +1148,21 @@ class LocalFinishHarvestTests(LocalFixture):
         self.assertEqual("late_review_fail", caught.exception.code)
         e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the late FAIL is wrong.", code="review_override")
         self.assertEqual("COMPLETE", publisher.finish_local(self.root)["state"])
+
+    def test_finish_local_refuses_an_incomplete_harvest(self):
+        self.committed()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        locked = Journal(self.host, "wf_fixture-0010", project="locked-project")
+        locked.agent("a0fixturerev10", lens(token, "FAIL", "A late FAIL in a journal nobody can read."))
+        locked.path.chmod(0)
+        self.addCleanup(locked.path.chmod, 0o644)
+        with self.assertRaises(e.RunError) as caught:
+            publisher.finish_local(self.root)
+        self.assertEqual("harvest_incomplete", caught.exception.code)
+        locked.path.chmod(0o644)
+        with self.assertRaises(e.RunError) as caught:
+            publisher.finish_local(self.root)
+        self.assertEqual("late_review_fail", caught.exception.code)
 
 
 class PullRequestDecisionTests(PublisherFixture):
@@ -1235,6 +1327,28 @@ class WorkflowJournalTests(unittest.TestCase):
         with self.assertRaises(e.RunError) as caught:
             wj.find_results(lambda result: True, search_root=self.home)
         self.assertEqual("journal_identity", caught.exception.code)
+
+    def test_a_line_that_breaks_the_match_is_skipped(self):
+        journal = Journal(self.home)
+        journal.agent(IMPLEMENTER, {"review_token": ["not", "hashable"]})
+        journal.agent("a0fixturerev01", {"review_token": "review-plain"})
+        found = wj.find_results(lambda result: result.get("review_token") in {"review-plain": 1}, search_root=self.home)
+        self.assertEqual(["a0fixturerev01"], [item["agent_id"] for item in found])
+
+    def test_unreadable_directories_and_journals_are_reported_or_refused(self):
+        readable = Journal(self.home)
+        readable.agent(IMPLEMENTER, {"dispatch_id": "d1"})
+        session = Journal(self.home, project="locked-project")
+        session.agent(IMPLEMENTER, {"dispatch_id": "d1"})
+        locked_dir = session.project / "fixture-session"
+        locked_dir.chmod(0)
+        self.addCleanup(locked_dir.chmod, 0o755)
+        problems = []
+        found = wj.find_results(lambda result: True, search_root=self.home, strict=False, problems=problems)
+        self.assertEqual(([str(readable.path)], [str(locked_dir)]), ([item["journal"] for item in found], [item["path"] for item in problems]))
+        with self.assertRaises(e.RunError) as caught:
+            wj.find_results(lambda result: True, search_root=self.home)
+        self.assertEqual("journal_unreadable", caught.exception.code)
 
     def test_host_root_confines_search_roots_and_named_journals(self):
         outside = Journal(self.home.parent / "outside")
