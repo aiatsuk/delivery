@@ -99,7 +99,7 @@ def _entries(path: Path):
             yield line, entry
 
 
-def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = True) -> list[dict]:
+def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = True, rejected: list | None = None) -> list[dict]:
     e = _engine()
     started, found = {}, []
     for line, entry in _entries(path):
@@ -110,10 +110,13 @@ def _scan(path: Path, match: Callable[[dict], Any], host: Path, strict: bool = T
             continue
         try:
             found.append(_checked(path, line, entry, started, host))
-        except e.RunError:
-            # A non-strict scan collects only results with complete provenance.
+        except e.RunError as exc:
+            # A non-strict scan collects only results with complete provenance and can list the others.
             if strict:
                 raise
+            if rejected is not None:
+                rejected.append({"journal": str(path), "line_sha256": hashlib.sha256(line).hexdigest(), "code": exc.code, "message": exc.message,
+                                 "agent_id": entry.get("agentId"), "result": entry["result"]})
     return found
 
 
@@ -133,17 +136,17 @@ def _checked(path: Path, line: bytes, entry: dict, started: dict, host: Path) ->
             "transcript_sha256": hashlib.sha256(transcript.read_bytes()).hexdigest(), "host_root": str(host)}
 
 
-def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None, host=None, strict=True) -> list[dict]:
+def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None, host=None, strict=True, rejected: list | None = None) -> list[dict]:
     """Return every matching agent result with its journal line and transcript hashes.
 
     ``host`` is the run's recorded host root (default: the effective one). With a named journal
     the whole host root is scanned too, so another matching result elsewhere is returned as well
     and the caller sees it instead of a hand-picked journal. ``strict=False`` skips results with
-    incomplete provenance instead of refusing them.
+    incomplete provenance instead of refusing them, listing them in ``rejected`` when given.
     """
     host = Path(host).resolve() if host is not None else host_root()
     paths = _journals(journal, search_root, host)
-    found = [item for path in paths for item in _scan(path, match, host, strict)]
+    found = [item for path in paths for item in _scan(path, match, host, strict, rejected)]
     if journal is not None and host.is_dir():
         seen = {(item["journal"], item["line_sha256"]) for item in found}
         found += [item for path in _search(host) for item in _scan(path, match, host, strict) if (item["journal"], item["line_sha256"]) not in seen]

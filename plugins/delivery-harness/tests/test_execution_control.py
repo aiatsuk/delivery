@@ -21,6 +21,7 @@ from unittest import mock
 from tests.test_run_engine import PASS_EVIDENCE, SCRIPTS, RunFixture, e, gate, git, plan
 from tests.test_local_mode import LocalFixture
 from tests.test_publisher import PublisherFixture
+from tests.test_run_adversarial import dependent_plan
 import publisher
 import workflow_journal as wj
 
@@ -511,7 +512,6 @@ class ReviewImportTests(ControlFixture):
         token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
         Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, evidence="PASS: fine."))
         Journal(self.search, "wf_fixture-0003").agent(IMPLEMENTER, lens(token, "FAIL", "The implementer reviewing itself."))
-        Journal(self.search, "wf_fixture-0004").agent("a0fixturerev04", lens(token, "FAIL", "A result whose transcript is missing."), transcript=False)
         (path / "scratch.txt").write_text("changes the content\n")
         issued = e.review_token(self.root, task_id="value", lens="adversary")
         self.assertEqual(["adversary", "conformance"], issued["lenses"])
@@ -829,7 +829,7 @@ class RerollTests(ControlFixture):
         (self.home / "override.md").write_text("Synthetic user decision: the marker is out of scope, so that FAIL is wrong.\n")
         grant = self.cli("authorize", "--run", self.root, "--scope", "decision", "--code", "review_override", "--task", "value",
                          "--actor", "fixture-user", "--evidence-file", self.home / "override.md")["decision_grants"][-1]
-        self.assertEqual(("review_override", "value", 1), (grant["code"], grant["task"], grant["attempt"]))
+        self.assertEqual(("review_override", "value"), (grant["code"], grant["task"]))
         self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
 
 
@@ -846,16 +846,7 @@ class RerollTests(ControlFixture):
         e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic integrated finding on the changed content.", finding_keys=["value.txt|other"])
         self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-4", "PASS", PASS_EVIDENCE)
 
-    def test_a_fail_of_an_earlier_plan_version_or_attempt_is_not_a_reroll(self):
-        self.integrated()
-        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding in the first plan version.", finding_keys=["value.txt|mode"])
-        # A fix dispatch moves that FAIL into the verification history, which a revision keeps.
-        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-v1", "Synthetic correction attempt.")["integration_fix"]
-        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"]})
-        self.assertIn("FAIL", [review["verdict"] for entry in e.load(self.root)["verification_history"] for review in entry["reviews"]])
-        e.revise(self.root, "Synthetic revision after the integrated FAIL.")
-        self.assertEqual("READY_TO_PUBLISH", self.integrated()["state"])
-        e.revise(self.root, "Synthetic revision to test attempts.")
+    def test_a_new_attempt_with_identical_content_is_still_guarded(self):
         self.begin()
         self.implement()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
@@ -863,13 +854,23 @@ class RerollTests(ControlFixture):
         vanished = e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:vanishing")["tasks"]["value"]["path"]
         shutil.rmtree(vanished)
         e.abandon_task(self.root, "value", "The first attempt's worktree was deleted.")
-        e.prepare_task(self.root, "value")
+        self.assertEqual(2, e.prepare_task(self.root, "value")["tasks"]["value"]["attempt"])
         e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:second-attempt")
         self.write_value()
         self.report()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
-        self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")
 
+    def test_a_fail_of_an_earlier_plan_version_guards_identical_content(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding in the first plan version.", finding_keys=["value.txt|mode"])
+        e.revise(self.root, "Synthetic revision after the integrated FAIL.")
+        self.begin()
+        self.implement()
+        self.verify()
+        e.integrate(self.root)
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)
 
     def test_an_override_covers_only_fails_recorded_before_it(self):
         self.integrated()
@@ -880,19 +881,146 @@ class RerollTests(ControlFixture):
         e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the second FAIL is wrong too.", code="review_override")
         self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-4", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
 
-    def test_a_pass_after_an_environment_or_test_plan_fail_needs_no_override(self):
+    def test_an_environment_labelled_integrated_fail_guards_a_pass_on_the_same_content(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic finding: the fixture device was offline.", decision="environment")
+        self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the device outage caused that FAIL, not the change.", code="review_override")
+        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
+
+    def test_a_test_plan_labelled_task_fail_guards_a_pass_on_the_same_content(self):
         self.begin()
         self.implement()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
-        e.review(self.root, "fixture-reviewer", "FAIL", "Synthetic finding: the fixture device was offline.", task_id="value", decision="environment")
-        self.redispatch("synthetic:after-environment")
+        e.review(self.root, "fixture-reviewer", "FAIL", "Synthetic finding: the gate read a missing fixture file.", task_id="value", decision="test-plan")
+        self.redispatch("synthetic:after-test-plan")
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
-        self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
-        self.assert_code("decision_state", e.authorize, self.root, "decision", "fixture-user", "Synthetic override with nothing to override.", code="review_override", task="value")
+        self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")
+
+
+class PendingVerdictTests(ControlFixture):
+    """Order, not harvest: returned verdicts are imported before their review subject may change."""
+
+    def returned(self, verdict="PASS", evidence=PASS_EVIDENCE, defects=None, run_id="wf_fixture-0002", agent="a0fixturerev01"):
+        self.imported()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
+        journal = Journal(self.search, run_id)
+        journal.agent(agent, lens(token, verdict, evidence, defects))
+        return token, journal
+
+    def test_rework_waits_for_unimported_verdicts_then_works(self):
+        self.returned()
+        pending = self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic finding raised outside the review.")
+        self.assertIn("task value conformance: PASS from workflow-agent:wf_fixture-0002/a0fixturerev01", pending.message)
+        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["conformance"], task_id="value")["tasks"]["value"]["status"])
+        self.assertEqual("REWORK", e.rework(self.root, "value", "Synthetic finding raised after the import.")["tasks"]["value"]["status"])
+
+    def test_a_typed_fail_waits_for_unimported_verdicts(self):
+        self.begin()
+        self.implement()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The value misses its newline."))
+        self.assert_code("review_results_pending", e.review, self.root, "fixture-reviewer", "FAIL", "Synthetic typed finding.", task_id="value")
+
+    def test_fix_register_waits_for_unimported_verdicts_then_works(self):
+        self.integrated()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The integrated value misses its marker.", [{"file": "value.txt", "kind": "behavior"}]))
+        self.assert_code("review_results_pending", e.register_fix, self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the marker.")
+        self.assertEqual("FAIL", e.import_review(self.root, lenses=["integrated"])["reviews"][-1]["verdict"])
+        self.assertEqual("DISPATCHED", e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the marker.")["integration_fix"]["status"])
+
+    def test_revise_archives_pending_verdicts_and_a_fail_stays_a_fail(self):
+        token, _ = self.returned("FAIL", "The value misses its newline.")
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, evidence="PASS: fine."))
+        self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic finding.")
+        revised = e.revise(self.root, "Synthetic revision while a verdict waits.")
+        version = revised["previous_versions"][-1]
+        archived = version["archived_review_verdicts"]
+        self.assertEqual([("value", "conformance", "FAIL")], [(item["task"], item["lens"], item["verdict"]) for item in archived["reviews"]])
+        self.assertIn(archived["reviews"][0], version["reviews"])
+        self.assertEqual(["workflow-agent:wf_fixture-0003/a0fixturerev02"], [item["actor"] for item in archived["refused"]])
+        self.assertEqual(("archived", {}), (revised["review_request_history"][-1]["status"], revised["review_requests"]))
+        self.begin()
+        self.implement()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer", "PASS", PASS_EVIDENCE, task_id="value")
+
+    def test_a_deleted_transcript_makes_the_pending_check_refuse(self):
+        _, journal = self.returned()
+        (journal.dir / "agent-a0fixturerev01.jsonl").unlink()
+        self.assert_code("journal_transcript_missing", e.rework, self.root, "value", "Synthetic finding.")
+        (Path(e.load(self.root)["tasks"]["value"]["path"]) / "scratch.txt").write_text("changes the content\n")
+        self.assert_code("journal_transcript_missing", e.review_token, self.root, task_id="value", lens="adversary")
+        (Path(e.load(self.root)["tasks"]["value"]["path"]) / "scratch.txt").unlink()
+        revised = e.revise(self.root, "Synthetic revision: the transcript is gone for good.")
+        self.assertEqual(["journal_transcript_missing"], [item["code"] for item in revised["previous_versions"][-1]["archived_review_verdicts"]["unverified"]])
+
+    def test_dependency_rework_and_integration_wait_for_pending_verdicts(self):
+        self.begin(dependent_plan())
+        self.implement()
+        self.verify()
+        self.implement("second", {"second.txt": "final\n"})
+        self.assertTrue(e.execute_gate(self.root, task_id="second")["passed"])
+        token = e.review_token(self.root, task_id="second", lens="conformance")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
+        self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic dependency finding.")
+        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["conformance"], task_id="second")["tasks"]["second"]["status"])
+        again = e.review_token(self.root, task_id="second", lens="conformance")["token"]
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(again))
+        self.assert_code("review_results_pending", e.integrate, self.root)
+        e.import_review(self.root, lenses=["conformance"], task_id="second")
+        self.assertEqual("VERIFYING", e.integrate(self.root)["state"])
+
+    def test_review_tokens_are_issued_only_where_their_verdicts_can_be_imported(self):
+        self.begin()
+        e.prepare_task(self.root, "value")
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:value")
+        self.assert_code("review_state", e.review_token, self.root, task_id="value", lens="conformance")
+        self.write_value()
+        self.report()
+        self.verify()
         e.integrate(self.root)
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
-        e.review(self.root, "fixture-integration-reviewer", "FAIL", "Synthetic finding: the verification case read the wrong file.", decision="test-plan")
-        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-2", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
+        self.assert_code("review_state", e.review_token, self.root, task_id="value", lens="conformance")
+        e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix", "Synthetic correction.")
+        self.assert_code("review_state", e.review_token, self.root, lens="integrated")
+
+
+class PendingPublicationTests(PublisherFixture):
+    def test_refresh_and_merge_wait_for_pending_integration_verdicts(self):
+        self.published()
+        self.grant_merge()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        Journal(self.host_root, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
+        self.assert_code("review_results_pending", publisher.merge, self.root, provider=self.provider)
+        self.remote_commit({"new-main.txt": "A new base for the refresh.\n"})
+        self.assert_code("review_results_pending", publisher.refresh, self.root, provider=self.provider)
+        e.import_review(self.root, lenses=["integrated"])
+        self.assertEqual("VERIFYING", publisher.refresh(self.root, provider=self.provider)["state"])
+
+
+class PendingLocalFinishTests(LocalFixture):
+    def setUp(self):
+        self.host_dir = tempfile.TemporaryDirectory(prefix="delivery-local-host-")
+        self.addCleanup(self.host_dir.cleanup)
+        self.host = Path(self.host_dir.name).resolve()
+        host = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.host)})
+        host.start()
+        self.addCleanup(host.stop)
+        super().setUp()
+
+    def test_finish_local_waits_for_pending_integration_verdicts(self):
+        self.committed()
+        token = e.review_token(self.root, lens="integrated")["token"]
+        Journal(self.host, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
+        with self.assertRaises(e.RunError) as caught:
+            publisher.finish_local(self.root)
+        self.assertEqual("review_results_pending", caught.exception.code)
+        e.import_review(self.root, lenses=["integrated"])
+        self.assertEqual("COMPLETE", publisher.finish_local(self.root)["state"])
 
 
 class PullRequestDecisionTests(PublisherFixture):
