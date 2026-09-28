@@ -61,9 +61,11 @@ class GateJobTests(RunFixture):
         self.fail("The actual fixture process did not reach its checkpoint.")
 
     def running_job(self, task=None, key=None):
+        # Wait for the identity checkpoint as well as the PID: a test that snapshots the run
+        # before the runner's last pre-wait write would race with it.
         return next((job for job in e.load(self.root).get("gate_jobs", {}).values()
                      if job["status"] == "RUNNING" and (task is None or job["task"] == task)
-                     and (key is None or job["key"] == key) and job["child_pid"]), None)
+                     and (key is None or job["key"] == key) and job["child_pid"] and job.get("child_identity")), None)
 
     @contextlib.contextmanager
     def running(self, task="value", index=0, name="first", case=None):
