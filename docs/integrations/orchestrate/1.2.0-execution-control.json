@@ -1,0 +1,35 @@
+{
+  "source_revision": "225818ce57741831f9c224f1d03d247b9d6fce7e",
+  "disposition": "integrated",
+  "rationale": "Local 1.2.0 execution-control change, same pinned source. Adopted from the orchestrate approach: the execution loop driven by host workflow scripts with schema-checked results, one agent per review lens, gate triage that separates environment problems from implementer defects, and results bound to the staged tree. The engine stays the only state owner and imports results from the host-written journal. Gate runner fixed for fast-exiting commands; receipt written with its job outcome. Model pins, installers and broad staging remain excluded.",
+  "reviewer": "Independent read-only review of the 1.2.0 change in seven rounds on September 27 and 28, 2026, each reproducing its findings against the code; every defect it reported was fixed and re-verified, and the final round returned PASS. Review prose does not authenticate identity.",
+  "tests": "Full plug-in suite 504/504 in six parallel shards (tools/run_test_shard.py), mutation checks per new rule, and two live local-only runs through the shipped workflows in Claude Code 2.1.283 that ended COMPLETE; see docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/SKILL.md",
+    "skill/references/reviewer-brief.md",
+    "skill/references/harness-claude.md",
+    "skill/scripts/gate.py"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/workflows/delivery-implement.js",
+    "plugins/delivery-harness/skills/delivery/workflows/delivery-review.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}

@@ -4,35 +4,43 @@
     "factory": {
       "disposition": "integrated",
       "integration_sha256": {
-        "plugins/delivery-harness/skills/delivery/SKILL.md": "e36d7cc318bbac391e7afab872f8b89e587f15cea4fcec2b9f4d377c88ffa8f3",
-        "plugins/delivery-harness/skills/delivery/references/run-contract.md": "bb56a9be961dde3c564982c04c48f3799f20b64cadc72be350c4ea98da5ed035",
-        "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "9837aa438bd78eaa7338ea66378464268f87545614a12dbc3eb4000c61f050f0",
-        "plugins/delivery-harness/tests/test_run_adversarial.py": "d6dad37535abcdf1e7a93365da1f777452023ecf76672cdc96609e604a25d3d2",
-        "plugins/delivery-harness/tests/test_run_engine.py": "c631b80d5e7425d91b78f2e84347407f80a5fa31aa71add2c3330fc8c6cc94a1"
+        "plugins/delivery-harness/skills/delivery/SKILL.md": "f6532fc2ac66743a9995308a04678a162cffd85c3a59077b81c913305d2528de",
+        "plugins/delivery-harness/skills/delivery/references/run-contract.md": "d6b033fa18dadcc4d21d72c8edb291fc747b766c69feef7aa66ec3378fe17b4d",
+        "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "1629c63257a1f5aa7195363cca5cfd1ccddb7a9d2af14bceb707731464ebf2af",
+        "plugins/delivery-harness/tests/test_execution_control.py": "7858b49a3d4dbe8d96317b731e78b6e7d038fd64b59490ae399671741c9b9cc9",
+        "plugins/delivery-harness/tests/test_run_adversarial.py": "86dc5970695cecf6d97fbae5d4c7d9fdc3665de479734e1890a3b4632826ede1",
+        "plugins/delivery-harness/tests/test_run_engine.py": "f46d4087c5c4fbcf846d089c1226624b268227b1c7eeaeb5e1a42455259bd8e4"
       },
-      "review_file": "docs/integrations/factory/initial.json",
-      "review_sha256": "c6a81cfd11032af4ad6c9e7f42b699949ea12c6ea552177762f903f3154674d4",
+      "review_file": "docs/integrations/factory/1.2.0-execution-control.json",
+      "review_sha256": "723348bb67568d62f1b387a12fa5ee4bc61c65ff1b57439c91732f416027736c",
       "reviewed_revision": "c431b34e4acd6882f3a03635d8aea64bfec6e650"
     },
     "orchestrate": {
       "disposition": "integrated",
       "integration_sha256": {
-        "plugins/delivery-harness/PROVENANCE.md": "fc0d7362a7ef9d645275cdf9ccbfb59479481d9ed9b76d3793ef39e0a8c647d6",
-        "plugins/delivery-harness/README.md": "ba18404dafe90310a36c4a2af645e1d45feeafebe52bc42ee7597817d37089eb",
-        "plugins/delivery-harness/skills/delivery/SKILL.md": "e36d7cc318bbac391e7afab872f8b89e587f15cea4fcec2b9f4d377c88ffa8f3",
+        "plugins/delivery-harness/PROVENANCE.md": "a0d657039e909fc73ccc30b346db5df22b07953602d54f2911295645381a88fa",
+        "plugins/delivery-harness/README.md": "874de27cf4fbaca59fbd6ed237615198292bd7fcef01bada4528f00f40fd407c",
+        "plugins/delivery-harness/skills/delivery/SKILL.md": "f6532fc2ac66743a9995308a04678a162cffd85c3a59077b81c913305d2528de",
         "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md": "eae99ac443f37d4960b16be7dcf9ce4a2d782aa44e5eee05dbb2fe4735717f4a",
-        "plugins/delivery-harness/skills/delivery/references/host-execution.md": "15c27410ee71adad55e690ed98038eacdcd3a57ddecaa09ff1176d72681c0fb8",
-        "plugins/delivery-harness/skills/delivery/references/run-contract.md": "bb56a9be961dde3c564982c04c48f3799f20b64cadc72be350c4ea98da5ed035",
+        "plugins/delivery-harness/skills/delivery/references/host-execution.md": "d0d718161845475903dc007516e8a2916e5427b84377c0daaa564d12f5125f88",
+        "plugins/delivery-harness/skills/delivery/references/run-contract.md": "d6b033fa18dadcc4d21d72c8edb291fc747b766c69feef7aa66ec3378fe17b4d",
         "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py": "aad7638f34436a21cf44882645b48d7c393dc1969d460ae8fa0d7ccd3da1b9f8",
-        "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py": "f5575a46c98e8a8add130ae034cc784b080bb5e0544aedaeb06cf493d9180de5",
-        "plugins/delivery-harness/skills/delivery/scripts/git_ops.py": "f65931cebcfa89c0ae303dc5809c027dc0d2f0f835a3d34225a33eabce570896",
-        "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "9837aa438bd78eaa7338ea66378464268f87545614a12dbc3eb4000c61f050f0",
-        "plugins/delivery-harness/tests/test_gate_jobs.py": "94e5412fe27727998c19c04f3d116b2606e9f0197388ea7dd1f0edab064bb380",
+        "plugins/delivery-harness/skills/delivery/scripts/delivery.py": "f0b6da3629882bcbd4a4b1cb3a9ac87cd3b3dc047c4741bb3beb9ae08da5b2af",
+        "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py": "2251f4376b567dbcb50f75c97a041843b6c15cf4f5323bc1a34f73a77d0f111a",
+        "plugins/delivery-harness/skills/delivery/scripts/git_ops.py": "63aa97eb965ea7223176006dafe3931203b1733b43bcb0a2c689209b9d981d1d",
+        "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "1629c63257a1f5aa7195363cca5cfd1ccddb7a9d2af14bceb707731464ebf2af",
+        "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py": "18a631a4ea3ac36fbd1eb4134b69e9d211a2a269f9f950c0590b8b69560a0c42",
+        "plugins/delivery-harness/skills/delivery/workflows/delivery-implement.js": "20294cc6a4a602f62728b9ea7aa9b6a8b73633a161a77c3eff9442e49b2a4936",
+        "plugins/delivery-harness/skills/delivery/workflows/delivery-review.js": "1f66b1e94eeeff1bc65feddefa42969f5202be709ff33a3d6e12c889c541f965",
+        "plugins/delivery-harness/tests/test_execution_control.py": "7858b49a3d4dbe8d96317b731e78b6e7d038fd64b59490ae399671741c9b9cc9",
+        "plugins/delivery-harness/tests/test_gate_jobs.py": "3c9849fe213937a0c0c8ca91a9acffbc3f185b5a773188fa78a2e2ee812137f1",
         "plugins/delivery-harness/tests/test_git_ops.py": "55a57995b18ece1a9825847511bb4b17ca5ead8074bcb98f71cfc234cbb22a63",
-        "plugins/delivery-harness/tests/test_orchestrate_update.py": "3a2e5fb019aaf4cd562016d657c5c44d3268193c42d57b9c15b1841bc892e361"
+        "plugins/delivery-harness/tests/test_orchestrate_update.py": "3a2e5fb019aaf4cd562016d657c5c44d3268193c42d57b9c15b1841bc892e361",
+        "plugins/delivery-harness/tests/test_workflows.py": "c29a88bd74f9b32b9248ffcdf0d61db6f5ca547e924bf35454f5b38fe74c11e6",
+        "plugins/delivery-harness/tests/workflow_harness.js": "84fe6d8ce0e19dbdfae196cdfffca5cf6e6f56f3d7bcd7f2f46546aebfc89cfb"
       },
-      "review_file": "docs/integrations/orchestrate/0.5.0.json",
-      "review_sha256": "71352f3f0005ed062be7ee5efba8e97515d10ed5ff3bb0df3e31bdd8c9f4bbcb",
+      "review_file": "docs/integrations/orchestrate/1.2.0-execution-control.json",
+      "review_sha256": "d42e5a7def0fae1a39a459a2a033d1b2602d15e1ec7422f795f48381b3cc888f",
       "reviewed_revision": "225818ce57741831f9c224f1d03d247b9d6fce7e"
     },
     "product-driven-development": {
@@ -82,10 +90,10 @@
         "plugins/delivery-harness/skills/delivery/internal/spec/scripts/spec_flow.py": "ffee05aad2f7d6a492113206d4570a07c7ba491983e67c8bcdd319420a208d0a",
         "plugins/delivery-harness/tests/spec/test_delivery_spec_regressions.py": "ab47e2035306291c0ef826a2b6251458384e9da31699338f94fb61e4ca98807c",
         "plugins/delivery-harness/tests/spec/test_spec_flow.py": "ac988a7966fedfd0db06b70bee9ac2c603f653764d7c3ea2ebaa04ae3eff73b1",
-        "plugins/delivery-harness/tests/test_rich_integration.py": "a3229b3cdc99994b87242875c9840ee42697eafdf9bba47d109c719e49fca5e4"
+        "plugins/delivery-harness/tests/test_rich_integration.py": "732d5ff66ca893834af30d18615488dcb74c9fbe571142793fbfce8a2865f8b9"
       },
-      "review_file": "docs/integrations/spec-driven-development/initial.json",
-      "review_sha256": "a846b1c6ccd7d3f70a884216d5dd67deeaa74092256462cb07b2a87b55f1b7ba",
+      "review_file": "docs/integrations/spec-driven-development/1.2.0-execution-control.json",
+      "review_sha256": "fe381c167974ff9446121f1a84f6884b7da907b8e92c585b4623c2cb2df45bbe",
       "reviewed_revision": "40b0c1fda8ac84d4f344694b3fcfe8582dd33ae2"
     }
   }

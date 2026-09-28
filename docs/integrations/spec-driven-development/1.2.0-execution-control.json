@@ -1,0 +1,43 @@
+{
+  "source_revision": "40b0c1fda8ac84d4f344694b3fcfe8582dd33ae2",
+  "disposition": "integrated",
+  "rationale": "Local 1.2.0 execution-control change, same pinned source. The adapted specification/check engine is unchanged; its approval-to-content binding and materiality rules are applied to a bounded standing approval that cannot widen past its level, triggers or expiry, and its oracle rule to a status-only oracle lint. The rich-integration regression fixture now carries the review evidence minimum.",
+  "reviewer": "Independent read-only review of the 1.2.0 change in seven rounds on September 27 and 28, 2026, each reproducing its findings against the code; every defect it reported was fixed and re-verified, and the final round returned PASS. Review prose does not authenticate identity.",
+  "tests": "Full plug-in suite 504/504 in six parallel shards (tools/run_test_shard.py), mutation checks per new rule, and two live local-only runs through the shipped workflows in Claude Code 2.1.283 that ended COMPLETE; see docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/spec-driven-development/references/materiality-and-review.md",
+    "skills/spec-driven-development/references/test-case-quality.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/case-review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/check-source.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/check.template.json",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/decisions.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/design.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/feature-model.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/impact-analysis.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/impact-map.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/implementation-evidence.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/intent.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/post-implementation-review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/proposal.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/review-brief.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/review.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/spec-session.template.json",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/spec.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/tasks.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/test-plan.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-brief.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-cases.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-config.template.yaml",
+    "plugins/delivery-harness/skills/delivery/internal/spec/assets/verification-report.template.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/engine-guide.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/artifact-contract.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/test-case-quality.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/references/verification.md",
+    "plugins/delivery-harness/skills/delivery/internal/spec/scripts/spec_flow.py",
+    "plugins/delivery-harness/tests/spec/test_delivery_spec_regressions.py",
+    "plugins/delivery-harness/tests/spec/test_spec_flow.py",
+    "plugins/delivery-harness/tests/test_rich_integration.py"
+  ]
+}
