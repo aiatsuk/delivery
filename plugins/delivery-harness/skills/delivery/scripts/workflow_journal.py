@@ -69,6 +69,11 @@ def _named(journal, host: Path) -> Path:
     return path.resolve()
 
 
+def check_location(journal, search_root, host) -> None:
+    """Apply the named-journal and search-root rules without reading any result."""
+    _journals(journal, search_root, Path(host).resolve())
+
+
 def _search(root: Path) -> list[Path]:
     # A search never follows a symlinked project, session, run directory or journal: such
     # paths are skipped, so they can neither supply a result nor break unrelated imports.
