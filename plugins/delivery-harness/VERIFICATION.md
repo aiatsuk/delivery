@@ -18,7 +18,10 @@ interactive host run. For 1.2.0 one live local-only run on a throwaway repositor
 was driven through the shipped workflows in Claude Code 2.1.283 (implementation,
 two-lens task review and integrated review agents), with `task-import` and
 `review-import` reading the real host journal, and ended COMPLETE with an
-authorized fast-forward. That is one run, not a guarantee for every host version. No live merge, deployment or production effect
+authorized fast-forward. Autonomous sessions then completed the same kind of
+local-only request on their own: Claude Code with the plug-in loaded through
+`--plugin-dir` (workflow path), and Codex with native subagents (manual path).
+These are single runs, not a guarantee for every host version. No live merge, deployment or production effect
 is part of the test suite. Existing tests do not authenticate human authority or
 eliminate the remote-base race without repository-side branch protection.
 
