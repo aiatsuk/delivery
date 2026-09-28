@@ -265,7 +265,7 @@ class JournalImportTests(ControlFixture):
             self.assert_code("journal_symlink", e.import_task_report, self.root, "value", journal=linked.path)
             shutil.rmtree(linked.project)
         with self.subTest(code="named_journal_is_not_the_only_result"):
-            named = Journal(self.search / "deeper" / "named")
+            named = Journal(self.search, project="case-named")
             named.agent(IMPLEMENTER, result)
             Journal(self.search, project="case-other").agent("a0fixtureimpl03", result)
             self.assert_code("journal_result_ambiguous", e.import_task_report, self.root, "value", journal=named.path)
@@ -280,7 +280,10 @@ class JournalImportTests(ControlFixture):
         self.assert_code("journal_outside_host", e.import_task_report, self.root, "value", search_root=self.home / "outside")
         self.assert_code("journal_outside_host", e.import_task_report, self.root, "value", journal=outside.path)
         self.assert_code("search_root_mismatch", e.import_task_report, self.root, "value", search_root=self.search / "cases")
-        real = Journal(self.search / "cases" / "real")
+        deep = Journal(self.search / "cases" / "deep")
+        deep.agent(IMPLEMENTER, result)
+        self.assert_code("journal_layout", e.import_task_report, self.root, "value", journal=deep.path)
+        real = Journal(self.search, project="real-project")
         real.agent(IMPLEMENTER, result)
         (self.search / "linked-project").symlink_to(real.dir.parents[3], target_is_directory=True)
         aliased = self.search / "linked-project" / "fixture-session" / "subagents" / "workflows" / RUN_ID / "journal.jsonl"
@@ -289,11 +292,12 @@ class JournalImportTests(ControlFixture):
         self.assertEqual((str(self.search), str(real.path)), (run["tasks"]["value"]["agent"]["journal"]["host_root"], run["tasks"]["value"]["agent"]["journal"]["path"]))
 
     def test_run_records_its_host_root_and_imports_refuse_a_changed_one(self):
-        self.assertEqual(str(self.search), e.status(self.root)["workflow_host_root"])
+        self.assertEqual((str(self.search), False), tuple(e.status(self.root)[key] for key in ("workflow_host_root", "workflow_host_root_default")))
         with mock.patch.dict(os.environ):
             os.environ.pop("DELIVERY_WORKFLOW_HOST_ROOT")
             other = e.create(str(self.repo), "default-host", "A run created with the default host root.", store=str(self.home / "runs"))
         self.assertEqual(str(Path("~/.claude/projects").expanduser().resolve()), other["workflow_host_root"])
+        self.assertIs(True, e.status(other["root"])["workflow_host_root_default"])
         self.begin()
         dispatch_id = self.workflow_dispatch()
         Journal(self.search).agent(IMPLEMENTER, worker_result(dispatch_id))
@@ -308,10 +312,11 @@ class JournalImportTests(ControlFixture):
         self.begin()
         dispatch_id = self.workflow_dispatch()
         tree = git(Path(e.load(self.root)["tasks"]["value"]["path"]), "write-tree")
-        stale = Journal(self.search / "cases" / "stale")
+        stale = Journal(self.search, project="stale-project")
         stale.agent(IMPLEMENTER, {**worker_result(dispatch_id), "tree": "0" * 40})
         self.assert_code("import_tree_mismatch", e.import_task_report, self.root, "value", journal=stale.path)
-        current = Journal(self.search / "cases" / "current")
+        shutil.rmtree(stale.project)
+        current = Journal(self.search, project="current-project")
         current.agent(IMPLEMENTER, {**worker_result(dispatch_id), "tree": tree})
         run = e.import_task_report(self.root, "value", journal=current.path)
         self.assertEqual(("REPORTED", tree), (run["tasks"]["value"]["status"], run["tasks"]["value"]["report"]["tree"]))
@@ -346,7 +351,8 @@ class ReviewImportTests(ControlFixture):
         token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         same_run = Journal(self.search)
         same_run.agent(IMPLEMENTER, lens(token))
-        self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=same_run.path)
+        refused = self.assert_code("review_lenses_incomplete", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=same_run.path)
+        self.assertIn("implementation actor", refused.message)
         self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
 
     def test_implementer_agent_id_under_another_workflow_run_cannot_review(self):
@@ -354,7 +360,8 @@ class ReviewImportTests(ControlFixture):
         token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         other_run = Journal(self.search, "wf_fixture-0002")
         other_run.agent(IMPLEMENTER, lens(token))
-        self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=other_run.path)
+        refused = self.assert_code("review_lenses_incomplete", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=other_run.path)
+        self.assertIn("implementation actor", refused.message)
 
     def test_two_lenses_from_one_reviewer_agent_are_refused(self):
         self.reviewed_ready()
@@ -381,16 +388,16 @@ class ReviewImportTests(ControlFixture):
         owner = run["tasks"]["value"]
         self.assertEqual(("REWORK", 1, keys), (owner["status"], owner["rework_rounds"], owner["rework_history"][-1]["finding_keys"]))
 
-    def test_review_import_needs_a_result_and_one_per_agent(self):
+    def test_review_import_needs_a_result_and_counts_every_verdict_of_one_agent(self):
         self.reviewed_ready()
         token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         journal = Journal(self.search, "wf_fixture-0002")
         journal.agent("a0fixturerev01", lens("review-" + "0" * 32))
         self.assert_code("journal_result_missing", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
         journal.agent("a0fixturerev01", lens(token))
-        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev01", lens(token, evidence=PASS_EVIDENCE + "A second, different return of the same agent.\n"))
-        self.assert_code("journal_result_ambiguous", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
-        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev01", lens(token, "FAIL", "A second return of the same agent found the newline missing."))
+        run = e.import_review(self.root, lenses=["correctness"], task_id="value", journal=journal.path)
+        self.assertEqual(("FAIL", 2, "REWORK"), (run["reviews"][-1]["verdict"], len(run["reviews"][-1]["verdicts"]), run["tasks"]["value"]["status"]))
 
     def test_duplicate_verdicts_from_distinct_agents_are_combined_to_the_worst(self):
         self.reviewed_ready()
@@ -404,12 +411,15 @@ class ReviewImportTests(ControlFixture):
         self.assertEqual({("correctness", "PASS"), ("correctness", "FAIL")}, {(item["lens"], item["verdict"]) for item in receipt["verdicts"]})
         self.assertEqual(["workflow-agent:wf_fixture-0002/a0fixturerev01", "workflow-agent:wf_fixture-0003/a0fixturerev02"], sorted(receipt["reviewers"]))
 
-    def test_a_writer_among_duplicate_verdicts_makes_the_import_fail(self):
+    def test_a_writer_verdict_is_refused_and_the_independent_one_counts(self):
         self.reviewed_ready()
         token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
-        Journal(self.search, "wf_fixture-0003").agent(IMPLEMENTER, lens(token))
-        self.assert_code("reviewer_not_independent", e.import_review, self.root, lenses=["correctness"], task_id="value")
+        Journal(self.search, "wf_fixture-0003").agent(IMPLEMENTER, lens(token, "FAIL", "The implementer judging its own change."))
+        run = e.import_review(self.root, lenses=["correctness"], task_id="value")
+        receipt = run["reviews"][-1]
+        self.assertEqual(("PASS", "VERIFIED", ["workflow-agent:wf_fixture-0002/a0fixturerev01"]), (receipt["verdict"], run["tasks"]["value"]["status"], receipt["reviewers"]))
+        self.assertEqual([(f"workflow-agent:wf_fixture-0003/{IMPLEMENTER}", "writer_verdict")], [(item["actor"], item["code"]) for item in receipt["refused"]])
 
     def test_superseding_an_open_request_keeps_every_lens(self):
         self.reviewed_ready()
@@ -458,13 +468,54 @@ class ReviewImportTests(ControlFixture):
                 self.assert_code("workflow_review_required", e.review, self.root, "fixture-reviewer", verdict, evidence, task_id="value")
         self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
 
-    def test_lens_pass_with_one_line_evidence_is_refused(self):
+    def test_lens_pass_with_one_line_evidence_is_refused_and_a_correct_rerun_imports(self):
         self.reviewed_ready()
         token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
         journal = Journal(self.search, "wf_fixture-0002")
         journal.agent("a0fixturerev01", lens(token, evidence="PASS: looks correct."))
-        self.assert_code("review_evidence_insufficient", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
+        refused = self.assert_code("review_lenses_incomplete", e.import_review, self.root, lenses=["correctness"], task_id="value", journal=journal.path)
+        self.assertIn("A PASS needs concrete evidence", refused.message)
         self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token))
+        run = e.import_review(self.root, lenses=["correctness"], task_id="value")
+        self.assertEqual("VERIFIED", run["tasks"]["value"]["status"])
+        self.assertEqual([("correctness", "workflow-agent:wf_fixture-0002/a0fixturerev01", "PASS")],
+                         [(item["lens"], item["actor"], item["verdict"]) for item in run["reviews"][-1]["refused"]])
+
+    def test_a_malformed_fail_always_counts_and_a_malformed_pass_is_refused(self):
+        self.reviewed_ready()
+        token = e.review_token(self.root, task_id="value", lens="correctness")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", {"review_token": token, "verdict": "PASS", "evidence": PASS_EVIDENCE, "defects": "none"})
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", {"review_token": token, "verdict": "fail", "evidence": "", "defects": [{"file": 3}]})
+        run = e.import_review(self.root, lenses=["correctness"], task_id="value")
+        receipt = run["reviews"][-1]
+        self.assertEqual(("FAIL", ["(review)|other"], "REWORK"), (receipt["verdict"], receipt["finding_keys"], run["tasks"]["value"]["status"]))
+        self.assertEqual([["evidence", "defects"]], [item.get("normalized") for item in receipt["verdicts"]])
+        self.assertEqual(["workflow-agent:wf_fixture-0002/a0fixturerev01"], [item["actor"] for item in receipt["refused"]])
+
+    def test_an_open_request_with_unimported_verdicts_is_not_superseded(self):
+        self.reviewed_ready()
+        path = Path(e.load(self.root)["tasks"]["value"]["path"])
+        token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The staged value misses its newline."))
+        (path / "scratch.txt").write_text("changes the content so a new request would supersede the open one\n")
+        pending = self.assert_code("review_results_pending", e.review_token, self.root, task_id="value", lens="adversary")
+        self.assertIn("conformance: FAIL from workflow-agent:wf_fixture-0002/a0fixturerev01", pending.message)
+        (path / "scratch.txt").unlink()
+        run = e.import_review(self.root, lenses=["conformance"], task_id="value")
+        self.assertEqual(("FAIL", "REWORK"), (run["reviews"][-1]["verdict"], run["tasks"]["value"]["status"]))
+
+    def test_refused_or_writer_verdicts_do_not_hold_the_request_open(self):
+        self.reviewed_ready()
+        path = Path(e.load(self.root)["tasks"]["value"]["path"])
+        token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, evidence="PASS: fine."))
+        Journal(self.search, "wf_fixture-0003").agent(IMPLEMENTER, lens(token, "FAIL", "The implementer reviewing itself."))
+        Journal(self.search, "wf_fixture-0004").agent("a0fixturerev04", lens(token, "FAIL", "A result whose transcript is missing."), transcript=False)
+        (path / "scratch.txt").write_text("changes the content\n")
+        issued = e.review_token(self.root, task_id="value", lens="adversary")
+        self.assertEqual(["adversary", "conformance"], issued["lenses"])
+
 
 
 class TriageTests(ControlFixture):
@@ -663,6 +714,33 @@ class AbandonTests(ControlFixture):
         moved = e.abandon_task(self.root, "value", "The worker switched to its own branch.")["tasks"]["value"]["invalidated_by"]["moved"]
         self.assertEqual(("worker-own-branch", git(path, "rev-parse", "HEAD")), (moved["branch"], moved["head"]))
 
+    def test_abandoning_a_dispatch_whose_worktree_is_gone_starts_a_new_attempt(self):
+        self.begin()
+        e.prepare_task(self.root, "value")
+        owner = e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:vanished")["tasks"]["value"]
+        shutil.rmtree(owner["path"])
+        run = e.abandon_task(self.root, "value", "The worktree was deleted while the worker ran.")
+        gone = run["tasks"]["value"]["invalidated_by"]["missing_worktree"]
+        self.assertEqual(("INVALIDATED", 1, owner["path"], owner["branch"], owner["base_sha"]),
+                         (run["tasks"]["value"]["status"], run["tasks"]["value"]["support_rounds"], gone["path"], gone["branch"], gone["branch_head"]))
+        self.assertTrue(Path(owner["ownership_receipt"]).is_file())
+        self.assertEqual(owner["base_sha"], git(self.repo, "rev-parse", "refs/heads/" + owner["branch"]))
+        self.assertEqual((2, 1), (lambda fresh: (fresh["attempt"], fresh["support_rounds"]))(e.prepare_task(self.root, "value")["tasks"]["value"]))
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:after-vanished")
+        self.write_value()
+        self.report()
+        self.verify()
+        self.assertEqual("VERIFIED", e.load(self.root)["tasks"]["value"]["status"])
+
+    def test_abandoning_a_workflow_dispatch_whose_worktree_is_gone_invalidates_it(self):
+        self.begin()
+        e.prepare_task(self.root, "value")
+        path = e.register_agent(self.root, "value", via_workflow=True)["tasks"]["value"]["path"]
+        shutil.rmtree(path)
+        run = e.abandon_task(self.root, "value", "The workflow worktree disappeared.")
+        self.assertEqual(("INVALIDATED", path, False), (run["tasks"]["value"]["status"], run["tasks"]["value"]["invalidated_by"]["missing_worktree"]["path"],
+                                                        run["tasks"]["value"]["rework_history"][-1]["journal"]["result_present"]))
+
     def test_revise_archives_open_workflow_dispatches_but_not_manual_ones(self):
         self.begin(multi_plan("other"))
         e.prepare_task(self.root, "value")
@@ -714,6 +792,107 @@ class IntegratedDecisionTests(ControlFixture):
         self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
         again = e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic: the marker is missing in the new version too.", finding_keys=["value.txt|missing-marker"])
         self.assertEqual(("VERIFYING", 2), (again["state"], again["reviews"][-1]["spec_version"]))
+
+
+class RerollTests(ControlFixture):
+    def test_integrated_pass_after_a_fail_on_the_same_content_needs_an_override(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding: the release marker is missing.", finding_keys=["value.txt|missing-marker"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)
+        self.assert_code("decision_state", e.authorize, self.root, "decision", "fixture-user", "Synthetic override for a task without a FAIL.", code="review_override", task="value")
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the marker is not part of this change, so the FAIL is wrong.", code="review_override")
+        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
+
+    def test_integrated_pass_needs_content_changed_by_an_integration_fix(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding: the file mode is wrong.", finding_keys=["value.txt|mode"])
+        path = Path(e.load(self.root)["integration"]["path"])
+        for attempt, change in ((1, False), (2, True)):
+            fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", f"synthetic:fix-{attempt}", "Correct the file mode.")["integration_fix"]
+            if change:
+                (path / "value.txt").chmod(0o755)
+                git(path, "add", "--", "value.txt")
+            e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": f"synthetic fix result {attempt} for {fix['handle']}"})
+            self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+            if not change:
+                self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)
+        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-3", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
+
+    def test_task_pass_after_a_fail_on_the_same_content_in_the_attempt_needs_an_override(self):
+        self.begin()
+        self.implement()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        e.review(self.root, "fixture-reviewer", "FAIL", "Synthetic finding: the value lacks a trailing marker.", task_id="value")
+        self.redispatch("synthetic:same-content")
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")
+        (self.home / "override.md").write_text("Synthetic user decision: the marker is out of scope, so that FAIL is wrong.\n")
+        grant = self.cli("authorize", "--run", self.root, "--scope", "decision", "--code", "review_override", "--task", "value",
+                         "--actor", "fixture-user", "--evidence-file", self.home / "override.md")["decision_grants"][-1]
+        self.assertEqual(("review_override", "value", 1), (grant["code"], grant["task"], grant["attempt"]))
+        self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
+
+
+    def test_an_override_covers_only_the_content_it_names(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding on the first content.", finding_keys=["value.txt|mode"])
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision about the first content only.", code="review_override")
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-mode", "Correct the file mode.")["integration_fix"]
+        path = Path(e.load(self.root)["integration"]["path"])
+        (path / "value.txt").chmod(0o755)
+        git(path, "add", "--", "value.txt")
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"]})
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic integrated finding on the changed content.", finding_keys=["value.txt|other"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-4", "PASS", PASS_EVIDENCE)
+
+    def test_a_fail_of_an_earlier_plan_version_or_attempt_is_not_a_reroll(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic integrated finding in the first plan version.", finding_keys=["value.txt|mode"])
+        # A fix dispatch moves that FAIL into the verification history, which a revision keeps.
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-v1", "Synthetic correction attempt.")["integration_fix"]
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"]})
+        self.assertIn("FAIL", [review["verdict"] for entry in e.load(self.root)["verification_history"] for review in entry["reviews"]])
+        e.revise(self.root, "Synthetic revision after the integrated FAIL.")
+        self.assertEqual("READY_TO_PUBLISH", self.integrated()["state"])
+        e.revise(self.root, "Synthetic revision to test attempts.")
+        self.begin()
+        self.implement()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        e.review(self.root, "fixture-reviewer", "FAIL", "Synthetic finding in the first attempt.", task_id="value")
+        vanished = e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:vanishing")["tasks"]["value"]["path"]
+        shutil.rmtree(vanished)
+        e.abandon_task(self.root, "value", "The first attempt's worktree was deleted.")
+        e.prepare_task(self.root, "value")
+        e.register_agent(self.root, "value", "fixture-writer-value", "unit-test", "synthetic:second-attempt")
+        self.write_value()
+        self.report()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
+
+
+    def test_an_override_covers_only_fails_recorded_before_it(self):
+        self.integrated()
+        e.review(self.root, "fixture-integration-reviewer-2", "FAIL", "Synthetic first integrated finding.", finding_keys=["value.txt|mode"])
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the first FAIL is wrong.", code="review_override")
+        e.review(self.root, "fixture-integration-reviewer-3", "FAIL", "Synthetic second integrated finding on the same content.", finding_keys=["value.txt|other"])
+        self.assert_code("review_reroll", e.review, self.root, "fixture-integration-reviewer-4", "PASS", PASS_EVIDENCE)
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the second FAIL is wrong too.", code="review_override")
+        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-4", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
+
+    def test_a_pass_after_an_environment_or_test_plan_fail_needs_no_override(self):
+        self.begin()
+        self.implement()
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        e.review(self.root, "fixture-reviewer", "FAIL", "Synthetic finding: the fixture device was offline.", task_id="value", decision="environment")
+        self.redispatch("synthetic:after-environment")
+        self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
+        self.assertEqual("VERIFIED", e.review(self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")["tasks"]["value"]["status"])
+        self.assert_code("decision_state", e.authorize, self.root, "decision", "fixture-user", "Synthetic override with nothing to override.", code="review_override", task="value")
+        e.integrate(self.root)
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        e.review(self.root, "fixture-integration-reviewer", "FAIL", "Synthetic finding: the verification case read the wrong file.", decision="test-plan")
+        self.assertEqual("PASS", e.review(self.root, "fixture-integration-reviewer-2", "PASS", PASS_EVIDENCE)["reviews"][-1]["verdict"])
 
 
 class PullRequestDecisionTests(PublisherFixture):
@@ -894,6 +1073,11 @@ class WorkflowJournalTests(unittest.TestCase):
         with self.assertRaises(e.RunError) as caught:
             wj.find_results(lambda result: True, journal=self.home / "escape" / "fixture-session" / "subagents" / "workflows" / RUN_ID / "journal.jsonl")
         self.assertEqual("journal_outside_host", caught.exception.code)
+        deep = Journal(self.home / "deeper")
+        deep.agent(IMPLEMENTER, {"dispatch_id": "d1"})
+        with self.assertRaises(e.RunError) as caught:
+            wj.find_results(lambda result: True, journal=deep.path)
+        self.assertEqual("journal_layout", caught.exception.code)
         inside = Journal(self.home)
         inside.agent(IMPLEMENTER, {"dispatch_id": "d1"})
         self.assertEqual([str(self.home)], [item["host_root"] for item in wj.find_results(lambda result: True, journal=inside.path)])

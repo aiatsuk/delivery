@@ -44,6 +44,7 @@ STATUS_ONLY = tuple(re.compile(pattern) for pattern in (
 WORKFLOW_HOST = "claude-code-workflow"
 BUDGET_BLOCKERS = {"rework_budget", "support_budget", "non_converging"}
 DECISION_BLOCKERS = {"requirements_finding", "human_decision"}
+DECISION_CODES = DECISION_BLOCKERS | {"review_override"}
 INSTANT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}(?::?[0-9]{2})?)?", re.IGNORECASE)
 
 
@@ -426,17 +427,34 @@ def _authorize_rework_budget(root, actor: str, evidence: str, expected_revision=
 
 
 def _authorize_decision(root, actor: str, evidence: str, expected_revision=None, *, task=None, code=None) -> dict:
-    """Record the user's decision on a requirements or human-decision block; resume needs it."""
-    require(code in DECISION_BLOCKERS, "invalid_decision_grant", "A decision grant names --code requirements_finding or human_decision.")
+    """Record a user decision: resolving a requirements or human-decision block, or overriding a FAIL review.
+
+    A review_override is bound to one target (a task or the integration) and its exact current
+    content, which must already have a code-fix FAIL review in this plan version; the evidence says
+    why that FAIL is wrong. It covers only the FAILs recorded before it, so a later FAIL on the same
+    content needs a new override before a PASS can be recorded.
+    """
+    require(code in DECISION_CODES, "invalid_decision_grant", "A decision grant names --code requirements_finding, human_decision or review_override.")
     with transaction(root, "decision_recorded", expected_revision) as run:
         assert_plan(run)
         if task is not None:
             task_plan(run, identifier(task))
-        blocker = run.get("blocker") or {}
-        require(run["state"] == "BLOCKED" and blocker.get("code") == code and blocker.get("task") == task, "decision_state",
-                "Record a decision grant for the current requirements_finding or human_decision block, with the task it names (no --task for the integration).")
-        run.setdefault("decision_grants", []).append({**attestation(actor, evidence), "scope": "decision", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"],
-                                                      "task": task, "code": code, "blocker_at": blocker["at"]})
+        if code == "review_override":
+            require(task is None or task in run["tasks"], "missing_worktree", "Prepare the owned task worktree first.")
+            snap = snapshot(run, task)
+            failures = _failed_reviews(run, task, snap)
+            require(failures, "decision_state", "Record a review override only for the exact content that already received a code-fix FAIL review in this plan version.")
+            grant = {**attestation(actor, evidence), "scope": "decision", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"], "task": task, "code": code,
+                     "content": snap["content"], "base_sha": snap["base_sha"], "failed_reviews": [review["at"] for review in failures]}
+            if task is not None:
+                grant["attempt"] = run["tasks"][task]["attempt"]
+        else:
+            blocker = run.get("blocker") or {}
+            require(run["state"] == "BLOCKED" and blocker.get("code") == code and blocker.get("task") == task, "decision_state",
+                    "Record a decision grant for the current requirements_finding or human_decision block, with the task it names (no --task for the integration).")
+            grant = {**attestation(actor, evidence), "scope": "decision", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"],
+                     "task": task, "code": code, "blocker_at": blocker["at"]}
+        run.setdefault("decision_grants", []).append(grant)
     return load(root)
 
 
@@ -1170,8 +1188,15 @@ def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, 
             require(fix.get("report") and evidence_current(fix["report"], snapshot(run)), "stale_fix_report", "The integration fix report must match the current integration content.")
     require(gates_current(run, task_id), "gate_required", "Run all planned gates on the current content before review.")
     require(actor not in _writer_actors(run), "reviewer_not_independent", "The reviewer must not be a current or previous implementation actor.")
-    receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": snapshot(run, task_id),
+    current = snapshot(run, task_id)
+    if verdict == "PASS":
+        require(not _unoverridden_failures(run, task_id, current), "review_reroll",
+                "This exact content already received a code-fix FAIL review in this plan version; a later PASS does not replace it. Change the content "
+                "(rework, or an integration fix), or record the user's authorize --scope decision --code review_override for this content after that FAIL.")
+    receipt = {**attestation(actor, evidence), "task": task_id, "verdict": verdict, "snapshot": current,
                "plan_hash": run["plan_hash"], "spec_version": run["spec_version"], **(extra or {})}
+    if task_id is not None:
+        receipt["attempt"] = run["tasks"][task_id]["attempt"]
     if verdict == "FAIL":
         receipt.update(decision=decision, finding_keys=finding_keys)
     run["reviews"].append(receipt)
@@ -1191,6 +1216,30 @@ def _record_review(run: dict, root, actor: str, verdict: str, evidence: str, *, 
             owner.update(status="VERIFIED", patch=patch)
         else:
             _mark_rework(run, task_id, evidence, decision, finding_keys)
+
+
+def _failed_reviews(run: dict, task_id: str | None, snap: dict) -> list[dict]:
+    """code-fix FAIL reviews of this plan version on exactly this content (for a task: in its current attempt).
+
+    A test-plan or environment FAIL did not blame the code, so a PASS on unchanged content may
+    follow it; requirements and human-decision FAILs block the run instead.
+    """
+    reviews = [review for entry in run.get("verification_history", []) for review in entry.get("reviews", [])] + run["reviews"]
+    attempt = run["tasks"][task_id]["attempt"] if task_id is not None else None
+    return [review for review in reviews if review.get("task") == task_id and review.get("verdict") == "FAIL" and review.get("decision", "code-fix") == "code-fix"
+            and review.get("plan_hash") == run["plan_hash"] and review.get("spec_version") == run["spec_version"]
+            and (review.get("snapshot") or {}).get("content") == snap["content"] and review["snapshot"].get("base_sha") == snap["base_sha"]
+            and (task_id is None or review.get("attempt") == attempt)]
+
+
+def _unoverridden_failures(run: dict, task_id: str | None, snap: dict) -> list[dict]:
+    """code-fix FAILs on this content that no review_override recorded after them covers."""
+    attempt = run["tasks"][task_id]["attempt"] if task_id is not None else None
+    covered = {at for grant in run.get("decision_grants", []) if grant.get("code") == "review_override" and grant.get("task") == task_id
+               and grant.get("content") == snap["content"] and grant.get("base_sha") == snap["base_sha"]
+               and grant.get("plan_hash") == run["plan_hash"] and grant.get("spec_version") == run["spec_version"]
+               and grant.get("attempt") == attempt for at in grant.get("failed_reviews", [])}
+    return [review for review in _failed_reviews(run, task_id, snap) if review["at"] not in covered]
 
 
 def _integrated_finding(run: dict, receipt: dict, reason: str) -> None:
@@ -1267,16 +1316,29 @@ def review_token(root, *, task_id: str | None = None, lens: str = "default", exp
     Requests are recorded per target: every lens issued for the same content and reviewed result
     joins one open request, and review-import must import all of them together. A changed content,
     report or fix, or an import of the request, starts a new request with new tokens; a new request
-    that supersedes an open one keeps all of its lenses.
+    that supersedes an open one keeps all of its lenses. A verdict returned for an issued token
+    always counts, so an open request whose tokens already have unimported, countable verdicts is
+    not superseded: import them first.
     """
     lens = identifier(lens)
+    before = load(root)
+    assert_plan(before)
+    pending = _pending_request(before, task_id)
+    if pending and _open_request(before, task_id) is None:
+        waiting = _unimported_verdicts(before, pending, workflow_host(before))
+        require(not waiting, "review_results_pending",
+                "Verdicts were returned for the open review request but not imported (" + ", ".join(f"{item['lens']}: {item['verdict']} from {item['actor']}" for item in waiting)
+                + "); import them first with review-import. If the content changed since those tokens were issued, restore it so they import.")
     with transaction(root, "review_token_issued", expected_revision) as run:
         assert_plan(run)
         request = _open_request(run, task_id)
         if request is None:
+            superseded = _pending_request(run, task_id)
+            require((superseded or {}).get("request") == (pending or {}).get("request") and (superseded or {}).get("lenses") == (pending or {}).get("lenses"),
+                    "stale_review_token", "The review request changed while the journals were read; request the token again.")
             previous = run.setdefault("review_requests", {}).get(_review_target(task_id))
             # Superseding an open request of this plan version never drops a lens: each one must be reviewed again and imported.
-            carried = sorted(previous["lenses"]) if previous and _pending_request(run, task_id) else []
+            carried = sorted(superseded["lenses"]) if superseded else []
             if previous:
                 run.setdefault("review_request_history", []).append({**previous, "status": "superseded" if previous["status"] == "open" else previous["status"]})
             request = {"target": task_id, "identity": _review_identity(run, task_id), "request": run["revision"] + 1, "status": "open", "lenses": {}, "at": now()}
@@ -1287,6 +1349,61 @@ def review_token(root, *, task_id: str | None = None, lens: str = "default", exp
         issued = {"token": request["lenses"][lens], "task": task_id, "lens": lens, "content": request["identity"]["content"],
                   "request": request["request"], "lenses": sorted(request["lenses"]), "revision": run["revision"] + 1}
     return issued
+
+
+def _writer_agents(run: dict) -> tuple[set, set]:
+    writers = _writer_actors(run)
+    return writers, {actor.split("/", 1)[1] for actor in writers if actor.startswith("workflow-agent:") and "/" in actor}
+
+
+def _usable_defects(defects: Any) -> bool:
+    return isinstance(defects, list) and all(isinstance(d, dict) and all(isinstance(d[k], str) for k in ("file", "kind") if k in d) for d in defects)
+
+
+def _classify_verdict(lens: str, found: dict, writers: tuple[set, set]) -> dict:
+    """A FAIL for an issued token always counts; a PASS counts only with usable evidence and defects.
+
+    A FAIL whose evidence or defects are unusable is normalized (its defects become the single
+    finding key (review)|other); a PASS that fails validation is kept as refused, with its reason.
+    A verdict from a current or previous implementation actor never counts and is kept as refused
+    (writer_verdict); its lens still needs an independent verdict.
+    """
+    result = found["result"]
+    item = {"lens": lens, "actor": f"workflow-agent:{found['run_id']}/{found['agent_id']}", "journal": _journal_evidence(found)}
+    verdict = str(result.get("verdict", "")).strip().upper()
+    if item["actor"] in writers[0] or found["agent_id"] in writers[1]:
+        return {**item, "verdict": result.get("verdict"), "refused": "The reviewer is a current or previous implementation actor.", "refused_code": "writer_verdict"}
+    if verdict == "FAIL":
+        evidence, defects, normalized = result.get("evidence"), result.get("defects"), []
+        if not ((isinstance(evidence, str) and evidence.strip()) or (isinstance(evidence, dict) and evidence)):
+            evidence, normalized = "(the reviewer returned FAIL without usable evidence)", normalized + ["evidence"]
+        if not _usable_defects(defects):
+            defects, normalized = [{"file": "(review)", "kind": "other", "summary": "The reviewer returned FAIL with defects in an unusable shape."}], normalized + ["defects"]
+        return {**item, "verdict": "FAIL", "evidence": evidence, "defects": defects, **({"normalized": normalized} if normalized else {})}
+    if verdict != "PASS":
+        return {**item, "verdict": result.get("verdict"), "refused": "The verdict is neither PASS nor FAIL.", "refused_code": "invalid_verdict"}
+    try:
+        return _lens_result(lens, {**found, "result": {**result, "verdict": "PASS"}})
+    except RunError as exc:
+        return {**item, "verdict": "PASS", "refused": exc.message, "refused_code": exc.code}
+
+
+def _unimported_verdicts(run: dict, request: dict, host: str) -> list[dict]:
+    """Countable verdicts returned for an open request's tokens (an open request has imported none yet).
+
+    Results without complete provenance, refused PASS results and verdicts from implementation
+    actors can never be imported, so they do not hold the request open.
+    """
+    import workflow_journal
+    tokens = {token: lens for lens, token in request["lenses"].items()}
+    writers = _writer_agents(run)
+    waiting = []
+    for found in workflow_journal.find_results(lambda result: result.get("review_token") in tokens, host=host, strict=False):
+        item = _classify_verdict(tokens[found["result"]["review_token"]], found, writers)
+        if "refused" in item:
+            continue
+        waiting.append({"lens": item["lens"], "actor": item["actor"], "verdict": item["verdict"]})
+    return waiting
 
 
 def _lens_result(lens: str, found: dict) -> dict:
@@ -1322,32 +1439,37 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
         found[tokens[match["result"]["review_token"]]].append(match)
     for lens, matches in found.items():
         require(matches, "journal_result_missing", f"No workflow journal result carries the current review token for lens {lens}; request review of the current content.")
-        agents = [match["agent_id"] for match in matches]
-        require(len(set(agents)) == len(agents), "journal_result_ambiguous", f"One reviewer agent returned several results for lens {lens}; inspect them before importing.")
-    # Several verdicts for one token from distinct agents are all imported; the worst one counts.
-    results = [_lens_result(lens, match) for lens in lenses for match in found[lens]]
+    # Every verdict returned for an issued token counts and the worst one decides; a PASS that fails
+    # validation is skipped and recorded as refused, and a FAIL is never dropped.
+    classified = [_classify_verdict(lens, match, _writer_agents(run)) for lens in lenses for match in found[lens]]
+    results = [item for item in classified if "refused" not in item]
+    refused = [{"lens": item["lens"], "actor": item["actor"], "verdict": item["verdict"], "reason": item["refused"], "code": item["refused_code"],
+                "line_sha256": item["journal"]["line_sha256"]} for item in classified if "refused" in item]
+    empty = [lens for lens in lenses if not any(item["lens"] == lens for item in results)]
+    require(not empty, "review_lenses_incomplete",
+            f"No usable verdict remains for lens {', '.join(empty)}; refused: " + "; ".join(f"{item['lens']} from {item['actor']}: {item['reason']}" for item in refused)
+            + ". Rerun that review with the same token, then import again.")
     verdict = "FAIL" if any(item["verdict"] == "FAIL" for item in results) else "PASS"
     keys = {f"{str(d.get('file', '')).strip().lower()}|{str(d.get('kind', '')).strip().lower()}" for item in results if item["verdict"] == "FAIL" for d in item["defects"]}
     finding_keys = sorted((keys - {"|"}) | set(finding_keys))
-    evidence = json.dumps({"lenses": results}, indent=2, sort_keys=True, ensure_ascii=False)
+    evidence = json.dumps({"lenses": results, "refused": refused}, indent=2, sort_keys=True, ensure_ascii=False)
     review_evidence(verdict, evidence)
-    actors = [item["actor"] for item in results]
+    actors = list(dict.fromkeys(item["actor"] for item in results))
     with transaction(root, "independent_review_imported", expected_revision) as run:
         require(workflow_host(run) == host, "host_root_changed", "The run's workflow host root changed while the journal was searched.")
         run.setdefault("workflow_host_root", host)
         current = _open_request(run, task_id)
         require(current and current["request"] == request["request"] and current["lenses"] == request["lenses"], "stale_review_token", "The reviewed content or its review request changed while the journal was searched; request review of the current content.")
-        writers = _writer_actors(run)
-        writer_agents = {actor.split("/", 1)[1] for actor in writers if actor.startswith("workflow-agent:") and "/" in actor}
-        agents = [item["journal"]["agent_id"] for item in results]
-        require(len(set(agents)) == len(agents) and len(set(actors)) == len(actors), "reviewer_not_independent", "Each review lens and each verdict needs a distinct reviewer agent.")
+        writers, writer_agents = _writer_agents(run)
+        agents = [agent for lens in lenses for agent in sorted({item["journal"]["agent_id"] for item in results if item["lens"] == lens})]
+        require(len(set(agents)) == len(agents), "reviewer_not_independent", "Each review lens needs its own reviewer agents; one agent returned verdicts for two lenses.")
         require(not writers.intersection(actors) and not writer_agents.intersection(agents), "reviewer_not_independent", "A reviewer must not be a current or previous implementation actor.")
         used = run.setdefault("accepted_review_events", {})
         lines = [item["journal"]["line_sha256"] for item in results]
         require(not used.keys() & set(lines), "review_event_reused", "This workflow review result was already recorded; request a fresh review.")
         _record_review(run, root, "+".join(actors), verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys,
-                       extra={"reviewers": actors, "lenses": list(lenses), "verdicts": [{"lens": item["lens"], "actor": item["actor"], "verdict": item["verdict"]} for item in results],
-                              "source": "workflow-journal"})
+                       extra={"reviewers": actors, "lenses": list(lenses), "source": "workflow-journal", "refused": refused,
+                              "verdicts": [{"lens": item["lens"], "actor": item["actor"], "verdict": item["verdict"], **({"normalized": item["normalized"]} if "normalized" in item else {})} for item in results]})
         for item in results:
             used[item["journal"]["line_sha256"]] = {"task": task_id, "lens": item["lens"], "actor": item["actor"], "revision": run["revision"] + 1}
         run["review_requests"][_review_target(task_id)] = {**current, "status": "imported", "imported_at": now()}
@@ -1657,7 +1779,9 @@ def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dic
     result names the dispatch. The round counts toward the task's test-plan/environment budget.
     Normally the task returns to REWORK with its current content as the new rework baseline. If
     the worker committed or switched branches, the observed HEAD and branch are recorded without
-    reading its content, and the task is INVALIDATED so task-prepare creates a new attempt.
+    reading its content; if the worktree no longer exists, its absence is recorded and the ownership
+    receipt and branch are kept. In both cases the task is INVALIDATED so task-prepare creates a new
+    attempt.
     """
     import workflow_journal
     reason = text(reason, "Reason for abandoning the dispatch")
@@ -1677,10 +1801,15 @@ def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dic
         require(owner and owner["status"] == "DISPATCHED" and owner["agent"]["dispatch_id"] == agent["dispatch_id"], "task_state", "The dispatch changed while the journals were read; inspect the task again.")
         receipt = _load_worktree_receipt(run, "task-" + task_id, owner.get("attempt", 0))
         require(all(owner.get(key) == receipt[key] for key in ("path", "branch", "ownership_receipt")), "worktree_identity", "The current worktree owner differs from its durable creation record.")
-        identity = git_ops.inspect_repo(owner["path"])
-        require(identity["primary"] == run["primary"] and identity["worktree"] == owner["path"], "worktree_identity", "The recorded worktree repository or exact path changed.")
-        moved = identity["branch"] != owner["branch"] or identity["head"] != owner["base_sha"]
         record = {"reason": reason, "at": now(), "journal": observed}
+        if not Path(owner["path"]).exists() and not Path(owner["path"]).is_symlink():
+            record["missing_worktree"] = {"path": owner["path"], "branch": owner["branch"], "ownership_receipt": owner["ownership_receipt"],
+                                          "branch_head": git_ops._ref_sha(Path(run["primary"]), "refs/heads/" + owner["branch"])}
+            moved = False
+        else:
+            identity = git_ops.inspect_repo(owner["path"])
+            require(identity["primary"] == run["primary"] and identity["worktree"] == owner["path"], "worktree_identity", "The recorded worktree repository or exact path changed.")
+            moved = identity["branch"] != owner["branch"] or identity["head"] != owner["base_sha"]
         if moved:
             record["moved"] = {"head": identity["head"], "branch": identity["branch"], "expected_head": owner["base_sha"], "expected_branch": owner["branch"]}
         owner["agent"].update(liveness="abandoned", abandoned=copy.deepcopy(record))
@@ -1692,12 +1821,13 @@ def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dic
                                                              "dispatch_id": agent["dispatch_id"], "abandoned": True, "journal": failed})
         entry = {"reason": reason, "report": None, "patch": None, "at": record["at"], "decision": "abandon",
                  "finding_keys": [], "abandoned_dispatch": agent["dispatch_id"], "journal": observed}
-        if moved:
-            # The worker's commits stay on the preserved worktree; the next attempt starts from a fresh one.
-            entry["moved"] = record["moved"]
+        if moved or "missing_worktree" in record:
+            # A moved worktree keeps the worker's commits; a missing one keeps its receipt and branch. The next attempt starts fresh.
+            detail = {key: record[key] for key in ("moved", "missing_worktree") if key in record}
+            entry.update(detail)
             owner.setdefault("rework_history", []).append(entry)
             owner["status"] = "INVALIDATED"
-            owner["invalidated_by"] = {"task": task_id, "reason": reason, "at": record["at"], "abandoned": True, "moved": record["moved"]}
+            owner["invalidated_by"] = {"task": task_id, "reason": reason, "at": record["at"], "abandoned": True, **detail}
         else:
             entry["baseline"] = snapshot(run, task_id)
             owner.setdefault("rework_history", []).append(entry)
@@ -1727,6 +1857,9 @@ def status(root) -> dict:
     result["gate_jobs"] = {key: {"status": job["status"], "task": job.get("task"), "case": job.get("case"), "resources": job.get("resources", [])} for key, job in run.get("gate_jobs", {}).items()}
     result["delivery_mode"] = run.get("delivery_mode", "github")
     result["workflow_host_root"] = run.get("workflow_host_root")
+    import workflow_journal
+    result["workflow_host_root_default"] = (run.get("workflow_host_root") == str(Path(workflow_journal.DEFAULT_SEARCH_ROOT).expanduser().resolve())
+                                            if run.get("workflow_host_root") else None)
     result["local_outcome"] = run.get("local_outcome")
     result["fix_budget"] = fix_budget(run)
     result["next_action"] = {
