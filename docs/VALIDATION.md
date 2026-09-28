@@ -103,3 +103,19 @@ real PR merge, deployment or production-side action is part of validation.
 - Not verified: Cursor hosts with the new commands; live GitHub
   publication of a workflow-dispatched run; Linux process-identity paths of the
   gate runner changes.
+
+## 1.3.0 shared execution loop (September 28, 2026)
+
+- The delivery-specific workflows were replaced by the orchestrate 0.7.0 loop,
+  shipped verbatim and checked against the pinned submodule by
+  `tests/test_workflows.py`.
+- `tests/test_workflows.py` runs that loop under node against the real engine
+  through `workflow_steps.py`, with scripted agents and a synthetic host journal:
+  prepare to VERIFIED with journal provenance, a red gate reworked under the engine
+  budget, a review FAIL, a failed implementer abandoned and redispatched, the
+  non-convergence block, a dependent prepared on the verified patch, an
+  unauthorized side-effect gate blocking, and the integrated review. It found two
+  defects before release (a dispatch step result that made the journal import
+  ambiguous, fixed in orchestrate 0.7.0; a pathspec bug in the scope check).
+- Full plug-in suite 505/505 in six shards; independent review FAIL then PASS.
+- Not yet covered: a live Claude Code host run of 1.3.0.

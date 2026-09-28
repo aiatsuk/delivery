@@ -1,0 +1,19 @@
+{
+  "source_revision": "c431b34e4acd6882f3a03635d8aea64bfec6e650",
+  "disposition": "integrated",
+  "rationale": "Local 1.3.0 change, same pinned source. The shared execution loop changed SKILL.md (section 3), run_engine.py (task-abandon recognizes the loop's implementer labels) and test_execution_control.py; the factory decision catalogue, budgets and blocker codes are unchanged and now drive the loop through the engine.",
+  "reviewer": "Independent read-only review of the 1.3.0 change on September 28, 2026: round 1 FAIL (gate refusals counted as red gates, journal problems abandoned results, error output outside the step schemas, missing review record), fixed with tests; round 2 PASS, each fix checked against the engine. The orchestrate side (0.7.0, PR #2) had its own review: FAIL then PASS. Review prose does not authenticate identity.",
+  "tests": "Full plug-in suite 505/505 in six parallel shards (tools/run_test_shard.py) before the review fixes, tests.test_workflows 14/14 after them (the shipped loop driven end to end against the real engine with a synthetic host journal: rework, abandonment, non-convergence, dependents, unauthorized gate, integrated review), make check. No live host run of 1.3.0 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/factory-qa-loop/SKILL.md",
+    "skills/factory-gates/SKILL.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py",
+    "plugins/delivery-harness/tests/test_run_engine.py"
+  ]
+}
