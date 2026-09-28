@@ -70,9 +70,11 @@ another version; refresh the saved copy after an update.
    runs ordinary engine commands, through relay agents: `prepare` (`task-prepare`),
    `dispatch` (`task-register --via-workflow`), the implementer (labels `impl:T:L0`,
    `rework:T:L0r<n>`; its report carries the dispatch ID and the staged tree),
-   `collect` (`task-import`; a result the engine refuses is abandoned with
-   `task-abandon`, which counts as a support round), `gate` (each planned gate with
-   `gate --index`; a gate without its side-effect authority blocks), `rework`
+   `collect` (`task-import`; a missing, malformed, out-of-scope or tree-mismatched
+   result is abandoned with `task-abandon`, which counts as a support round, while a
+   journal, host-root or run problem blocks), `gate` (each planned gate with
+   `gate --index`; a failing command is a red gate, while a gate that cannot run at
+   all, for example without its side-effect authority, blocks), `rework`
    (`task-rework --decision code-fix` with `file|kind` finding keys),
    `review-open` (`review-token` per lens), one reviewer per lens returning its
    token, `review-close` (`review-import` of every lens; the engine's verdict wins),

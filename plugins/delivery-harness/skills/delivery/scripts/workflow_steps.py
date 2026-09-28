@@ -218,13 +218,19 @@ def step_dispatch(a) -> dict:
     return {"exit_code": 0, "output": "registered", "dispatch": result["tasks"][a.task]["agent"]["dispatch_id"]}
 
 
+# Refusals that condemn the returned result itself: the dispatch is abandoned and the task reworked.
+# Any other refusal (the journal, the host root, the run or the engine) blocks, since abandoning would
+# throw away a result that may be valid and spend a round on a problem no implementer can fix.
+REFUSED_RESULTS = {"journal_result_missing", "invalid_report", "report_limit", "missing_text", "invalid_command",
+                   "scope_violation", "import_tree_mismatch"}
+
+
 def step_collect(a) -> dict:
     ok, result = delivery("task-import", "--run", a.run, "--task", a.task)
     if ok:
         return {"exit_code": 0, "output": "imported from the host journal", "accepted": True}
     reason = refusal(result)
-    if result["code"] in {"harvest_incomplete", "journal_unreadable", "journal_result_ambiguous", "host_root_changed"}:
-        # The journal itself is in question; abandoning would record a guess.
+    if result["code"] not in REFUSED_RESULTS:
         return {"exit_code": 1, "output": reason, "accepted": False, "blocked": f"the result cannot be imported: {reason}"}
     ok, abandoned = delivery("task-abandon", "--run", a.run, "--task", a.task, "--reason", f"workflow result not importable: {reason}")
     if not ok:
@@ -247,14 +253,11 @@ def step_gate(a) -> dict:
     for index, gate in enumerate(task["gates"]):
         ok, receipt = delivery("gate", "--run", a.run, "--task", a.task, "--index", str(index))
         if not ok:
+            # A planned command that ran and failed still returns a receipt; a refusal means the gate
+            # could not run at all (authority, a held resource, the run's state), which no rework fixes.
             reason = refusal(receipt)
-            if receipt["code"] in {"authorization_required", "gate_state", "gate_job_active", "stale_revision", "plan_drift"}:
-                return {"exit_code": 1, "tail": reason, "tree": "", "head": "", "results": results, "unstaged": [], "untracked": [],
-                        "outside_scope": [], "blocked": f"gate {index} cannot run: {reason}"}
-            results.append({"command": argv_text(gate["command"]), "rc": 127, "outcome": reason})
-            tail.append(f"$ {argv_text(gate['command'])}  ({reason})")
-            failed = True
-            break
+            return {"exit_code": 1, "tail": reason, "tree": "", "head": "", "results": results, "unstaged": [], "untracked": [],
+                    "outside_scope": [], "blocked": f"gate {index} cannot run: {reason}"}
         outcome = receipt["outcome"] if receipt["unchanged"] else f"{receipt['outcome']}; the command changed the worktree"
         results.append({"command": argv_text(gate["command"]), "rc": 0 if receipt["passed"] else (receipt["exit_code"] or 1),
                         "outcome": outcome, "log": receipt["log"]})
@@ -366,7 +369,7 @@ def build_args(a) -> dict:
             "worktree": owner["path"], "base_sha": run["base_sha"], "acceptance": plan.get("goal", ""),
             "requirements": [f"{r.get('id', '')}: {r.get('oracle', r.get('text', ''))}".strip(": ") for r in plan.get("requirements", [])],
             "gate": [argv_text(c["command"]) for c in plan.get("verification", []) if c.get("risk", "safe") == "safe"],
-            "brief": str(Path(a.run) / "run.json"), "lenses": lenses,
+            "brief": None, "lenses": lenses,
         }
         tasks = []
     helper = [sys.executable, str(Path(__file__).resolve()), "--run", str(Path(a.run).resolve())]
@@ -422,8 +425,11 @@ def main(argv=None) -> int:
             return emit(build_args(a))
         return emit(STEPS[a.step](a))
     except (StepError, OSError, ValueError, KeyError) as exc:
-        # Unexpected state is never guessed around: the loop blocks the task with this reason.
-        print(json.dumps({"exit_code": 2, "output": str(exc), "blocked": f"{a.step} failed: {exc}"}))
+        # Unexpected state is never guessed around: the loop blocks the task with this reason. The object
+        # also fills the gate and finish shapes, so a relay can return it unchanged from any step.
+        print(json.dumps({"exit_code": 2, "output": str(exc), "blocked": f"{a.step} failed: {exc}", "tail": str(exc), "tree": "", "head": "",
+                          "results": [], "unstaged": [], "untracked": [], "outside_scope": [], "patch": "", "sha256": "", "files": [],
+                          "verify_clean_exit": 1}))
         return 2
 
 
