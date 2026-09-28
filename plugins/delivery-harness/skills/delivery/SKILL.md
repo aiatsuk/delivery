@@ -116,12 +116,12 @@ shipped workflows, so agent identity and results come from the host journal
 instead of typed text (details in the host reference):
 
 - `task-prepare`, then `task-register --via-workflow` for each ready task, then run
-  `workflows/delivery-implement.js` with each task's dispatch ID, worktree,
+  `delivery-implement` workflow (by name, see the host reference) with each task's dispatch ID, worktree,
   contract, owned paths, acceptance and gates; `task-import` each task afterwards,
   or `task-abandon` a dispatch the workflow ended without an importable result.
 - One `review-token` per lens (conformance; add `adversary` for concurrency,
   async, retries or data, `security` for authority or input handling), run
-  `workflows/delivery-review.js`, then `review-import --lens …` per target.
+  `delivery-review` workflow, then `review-import --lens …` per target.
 
 Otherwise, for each dependency-ready task:
 

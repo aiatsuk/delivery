@@ -4,7 +4,7 @@
     "factory": {
       "disposition": "integrated",
       "integration_sha256": {
-        "plugins/delivery-harness/skills/delivery/SKILL.md": "f6532fc2ac66743a9995308a04678a162cffd85c3a59077b81c913305d2528de",
+        "plugins/delivery-harness/skills/delivery/SKILL.md": "87b201c59388d9ca024a4a17305ff081c64e766dafe9a3712b34787515c80ba5",
         "plugins/delivery-harness/skills/delivery/references/run-contract.md": "d6b033fa18dadcc4d21d72c8edb291fc747b766c69feef7aa66ec3378fe17b4d",
         "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "1629c63257a1f5aa7195363cca5cfd1ccddb7a9d2af14bceb707731464ebf2af",
         "plugins/delivery-harness/tests/test_execution_control.py": "7858b49a3d4dbe8d96317b731e78b6e7d038fd64b59490ae399671741c9b9cc9",
@@ -19,10 +19,10 @@
       "disposition": "integrated",
       "integration_sha256": {
         "plugins/delivery-harness/PROVENANCE.md": "a0d657039e909fc73ccc30b346db5df22b07953602d54f2911295645381a88fa",
-        "plugins/delivery-harness/README.md": "874de27cf4fbaca59fbd6ed237615198292bd7fcef01bada4528f00f40fd407c",
-        "plugins/delivery-harness/skills/delivery/SKILL.md": "f6532fc2ac66743a9995308a04678a162cffd85c3a59077b81c913305d2528de",
+        "plugins/delivery-harness/README.md": "b0fdf9d41a48cf5f2efee65c67acd95d01f5748aeeeb4237eec877590c75b1a6",
+        "plugins/delivery-harness/skills/delivery/SKILL.md": "87b201c59388d9ca024a4a17305ff081c64e766dafe9a3712b34787515c80ba5",
         "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md": "eae99ac443f37d4960b16be7dcf9ce4a2d782aa44e5eee05dbb2fe4735717f4a",
-        "plugins/delivery-harness/skills/delivery/references/host-execution.md": "d0d718161845475903dc007516e8a2916e5427b84377c0daaa564d12f5125f88",
+        "plugins/delivery-harness/skills/delivery/references/host-execution.md": "ace3ae0db964e563fe68cd10033b2c36c6e5c3b461663cf958bf5ce6978afd1c",
         "plugins/delivery-harness/skills/delivery/references/run-contract.md": "d6b033fa18dadcc4d21d72c8edb291fc747b766c69feef7aa66ec3378fe17b4d",
         "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py": "aad7638f34436a21cf44882645b48d7c393dc1969d460ae8fa0d7ccd3da1b9f8",
         "plugins/delivery-harness/skills/delivery/scripts/delivery.py": "f0b6da3629882bcbd4a4b1cb3a9ac87cd3b3dc047c4741bb3beb9ae08da5b2af",

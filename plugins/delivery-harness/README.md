@@ -100,6 +100,9 @@ validation alone does not prove the Cursor runtime was exercised.
 A shared global-skill installation can instead link `~/.claude/skills/delivery`
 to this bundle's `skills/delivery` directory. That form is invoked as `/delivery`,
 without a plugin namespace, and uses the same source rather than a second copy.
+Copy `skills/delivery/workflows/*.js` into `~/.claude/workflows/` as well, so the
+skill can launch `delivery-implement` and `delivery-review` by name from any
+working directory; refresh the copies after every update.
 
 ## Inspect and test
 
