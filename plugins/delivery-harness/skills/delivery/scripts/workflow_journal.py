@@ -3,15 +3,15 @@
 A workflow host writes ``<host-root>/<project>/<session>/subagents/workflows/<runId>/journal.jsonl``
 with ``started``, ``result`` and ``failed`` lines, and keeps each agent's transcript as
 ``agent-<agentId>.jsonl`` beside the journal. The host root is ``DELIVERY_WORKFLOW_HOST_ROOT``
-when set (tests), else ``~/.claude/projects``, resolved. Only journals inside it count: a search
-root or a named journal elsewhere is refused. The host, not the coordinator, supplies the agent
-identity. A result counts only after an earlier ``started`` line for the same key and agent, and
+when set (tests), else ``~/.claude/projects``, resolved; a run records it when it is created and
+passes it here. Only journals inside it count: a search always covers that whole root, and a named
+journal elsewhere is refused. The host, not the coordinator, supplies the agent identity. A result counts only after an earlier ``started`` line for the same key and agent, and
 only while its transcript exists.
 
 This is provenance, not authentication: anyone who can write under the host root can forge a
 journal. A named journal behind a symlink anywhere below the host root is refused; a search
-skips symlinked paths. A named journal does not hide other results: the host root is scanned
-as well, so a second result for the same match is still seen.
+skips symlinked paths. A named journal does not hide other results: the whole host root is
+scanned as well, so a second result for the same match is still seen.
 """
 from __future__ import annotations
 
@@ -72,15 +72,16 @@ def _search(root: Path) -> list[Path]:
     return [path for path in sorted(root.glob(PATTERN)) if not _has_symlink(path, root)]
 
 
-def _journals(journal, search_root) -> tuple[Path, list[Path]]:
+def _journals(journal, search_root, host: Path) -> list[Path]:
     e = _engine()
-    host = host_root()
     if journal is not None:
-        return host, [_named(journal, host)]
-    root = Path(search_root).expanduser().resolve() if search_root is not None else host
-    e.require(_within(root, host), "journal_outside_host", f"A journal search root must be inside the host projects root {host}.")
-    e.require(root.is_dir(), "journal_missing", "The workflow journal search root is not a directory.")
-    return host, _search(root)
+        return [_named(journal, host)]
+    if search_root is not None:
+        root = Path(search_root).expanduser().resolve()
+        e.require(_within(root, host), "journal_outside_host", f"A journal search root must be the host projects root {host}.")
+        e.require(root == host, "search_root_mismatch", f"A journal search covers the whole host projects root {host}; a narrower search root could hide a second result.")
+    e.require(host.is_dir(), "journal_missing", "The workflow host projects root is not a directory.")
+    return _search(host)
 
 
 def _entries(path: Path):
@@ -118,13 +119,15 @@ def _scan(path: Path, match: Callable[[dict], Any], host: Path) -> list[dict]:
     return found
 
 
-def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None) -> list[dict]:
+def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None, host=None) -> list[dict]:
     """Return every matching agent result with its journal line and transcript hashes.
 
-    With a named journal the host root is scanned too, so another matching result elsewhere
-    is returned as well and the caller sees the ambiguity instead of a hand-picked journal.
+    ``host`` is the run's recorded host root (default: the effective one). With a named journal
+    the whole host root is scanned too, so another matching result elsewhere is returned as well
+    and the caller sees it instead of a hand-picked journal.
     """
-    host, paths = _journals(journal, search_root)
+    host = Path(host).resolve() if host is not None else host_root()
+    paths = _journals(journal, search_root, host)
     found = [item for path in paths for item in _scan(path, match, host)]
     if journal is not None and host.is_dir():
         seen = {(item["journal"], item["line_sha256"]) for item in found}
@@ -132,13 +135,14 @@ def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None
     return found
 
 
-def observe_dispatch(label: str, dispatch_id: str, *, since: float | None = None) -> dict:
+def observe_dispatch(label: str, dispatch_id: str, *, since: float | None = None, host=None) -> dict:
     """Record what the host journals show for an unreturned workflow dispatch, without judging it.
 
     ``failed`` lists failed agents whose started line carries ``label``; ``results`` lists result
     lines naming ``dispatch_id``. Journals last written before ``since`` (epoch seconds) are skipped.
+    ``host`` is the run's recorded host root (default: the effective one).
     """
-    host = host_root()
+    host = Path(host).resolve() if host is not None else host_root()
     failed, results = [], []
     for path in (_search(host) if host.is_dir() else []):
         if since is not None and path.stat().st_mtime < since:

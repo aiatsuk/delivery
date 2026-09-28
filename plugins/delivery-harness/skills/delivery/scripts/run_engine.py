@@ -43,7 +43,22 @@ STATUS_ONLY = tuple(re.compile(pattern) for pattern in (
 ))
 WORKFLOW_HOST = "claude-code-workflow"
 BUDGET_BLOCKERS = {"rework_budget", "support_budget", "non_converging"}
+DECISION_BLOCKERS = {"requirements_finding", "human_decision"}
 INSTANT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}(?::?[0-9]{2})?)?", re.IGNORECASE)
+
+
+def workflow_journal_host_root() -> Path:
+    import workflow_journal
+    return workflow_journal.host_root()
+
+
+def workflow_host(run: dict) -> str:
+    """The run's recorded workflow host root; imports refuse when the effective root differs."""
+    effective = str(workflow_journal_host_root())
+    pinned = run.get("workflow_host_root")
+    require(pinned is None or pinned == effective, "host_root_changed",
+            f"This run reads workflow journals from {pinned}, but the effective host root is now {effective}; restore DELIVERY_WORKFLOW_HOST_ROOT or the host setup.")
+    return pinned or effective
 
 
 class RunError(Exception):
@@ -194,7 +209,8 @@ def create(repo: str, run_id: str, request: str, *, store: str | None = None, pr
              "product": context, "plan": None, "plan_hash": None, "spec_version": 0,
              "approval": None, "authorizations": {}, "tasks": {}, "integration": None,
              "gates": [], "reviews": [], "history": [], "blocker": None, "pr": None,
-             "spec_root": str(root / "spec"), "check_root": str(root / "check"), "delivery_mode": delivery_mode}
+             "spec_root": str(root / "spec"), "check_root": str(root / "check"), "delivery_mode": delivery_mode,
+             "workflow_host_root": str(workflow_journal_host_root())}
     atomic_json(root / "run.json", value)
     return value
 
@@ -345,9 +361,13 @@ def _authorize_standing(root, actor: str, evidence: str, expected_revision=None,
     return load(root)
 
 
-def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None, until=None, max_level=None, triggers=None, task=None) -> dict:
-    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "rework-budget", "standing-approval"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
-    require(task is None or scope == "rework-budget", "invalid_authorization_task", "Only rework-budget authority names a task.")
+def authorize(root, scope: str, actor: str, evidence: str, expected_revision=None, *, targets=None, count=None, until=None, max_level=None, triggers=None, task=None, code=None) -> dict:
+    require(scope in {"implement", "publish", "merge", "test-external", "test-destructive", "local-merge", "fix-budget", "rework-budget", "decision", "standing-approval"}, "invalid_scope", "Unknown authorization scope; deploy is deliberately separate.")
+    require(task is None or scope in {"rework-budget", "decision"}, "invalid_authorization_task", "Only rework-budget and decision authority name a task.")
+    require(code is None or scope == "decision", "invalid_authorization_code", "Only decision authority names a blocker code.")
+    if scope == "decision":
+        require(count is None and targets is None and until is None and max_level is None and triggers is None, "invalid_decision_grant", "A decision grant takes only --code, an optional --task, the actor and the user's decision as evidence.")
+        return _authorize_decision(root, actor, evidence, expected_revision, task=task, code=code)
     if scope == "standing-approval":
         require(count is None, "invalid_authorization_count", "Only fix-budget and rework-budget authority take a count.")
         return _authorize_standing(root, actor, evidence, expected_revision, targets=targets, until=until, max_level=max_level, triggers=triggers)
@@ -402,6 +422,21 @@ def _authorize_rework_budget(root, actor: str, evidence: str, expected_revision=
         kind = "support" if blocker["code"] == "support_budget" else "code-fix" if task is not None else "integration"
         run.setdefault("rework_budget_grants", []).append({**attestation(actor, evidence), "scope": "rework-budget", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"],
                                                            "task": task, "count": count, "kind": kind, "blocker_code": blocker["code"], "blocker_at": blocker["at"]})
+    return load(root)
+
+
+def _authorize_decision(root, actor: str, evidence: str, expected_revision=None, *, task=None, code=None) -> dict:
+    """Record the user's decision on a requirements or human-decision block; resume needs it."""
+    require(code in DECISION_BLOCKERS, "invalid_decision_grant", "A decision grant names --code requirements_finding or human_decision.")
+    with transaction(root, "decision_recorded", expected_revision) as run:
+        assert_plan(run)
+        if task is not None:
+            task_plan(run, identifier(task))
+        blocker = run.get("blocker") or {}
+        require(run["state"] == "BLOCKED" and blocker.get("code") == code and blocker.get("task") == task, "decision_state",
+                "Record a decision grant for the current requirements_finding or human_decision block, with the task it names (no --task for the integration).")
+        run.setdefault("decision_grants", []).append({**attestation(actor, evidence), "scope": "decision", "plan_hash": run["plan_hash"], "spec_version": run["spec_version"],
+                                                      "task": task, "code": code, "blocker_at": blocker["at"]})
     return load(root)
 
 
@@ -704,6 +739,9 @@ def prepare_task(root, task_id: str, expected_revision=None) -> dict:
                  "ownership_receipt": receipt["ownership_receipt"], "base_sha": receipt["checkpoint"]["head"],
                  "dependencies": dependencies, "previous_attempts": prior_attempts,
                  "status": "PREPARED", "agent": None, "dispatches": [], "report": None, "patch": None}
+        if previous and (previous.get("invalidated_by") or {}).get("abandoned"):
+            # A new attempt after an abandoned dispatch keeps the task's round counts, so budgets still bind.
+            owner.update({key: previous[key] for key in ("rework_rounds", "support_rounds") if key in previous})
         run["tasks"][task_id] = owner
         spec = {"task": task, "worktree": owner["path"], "branch": owner["branch"], "base_sha": owner["base_sha"],
                 "attempt": owner["attempt"], "dependencies": dependencies, "run_root": str(root), "plan_hash": run["plan_hash"],
@@ -742,19 +780,22 @@ def _exclusive_dispatch_available(run: dict, task_id: str) -> None:
 
 
 def _rework_baseline(run: dict, task_id: str, owner: dict) -> dict | None:
-    """The latest content the engine itself observed in this task worktree.
+    """The content the engine itself last established in this task worktree.
 
-    Candidates are every accepted report of the attempt, every later gate's after-snapshot
-    taken in the same worktree, and the snapshot recorded when a dispatch was abandoned.
+    Accepted reports of the attempt and snapshots recorded when a dispatch was abandoned set
+    the baseline. A gate run in the same worktree moves it to the gate's after-snapshot only
+    when the gate started from the baseline, so only the gate's own writes are adopted and a
+    write made before the gate is not laundered by running one.
     """
-    observed = [(report["at"], report["snapshot"]["content"]) for report in owner.get("reports", []) if report.get("snapshot")]
-    observed += [(gate["at"], gate["after"]["content"]) for gate in run["gates"]
-                 if gate.get("task") == task_id and (gate.get("after") or {}).get("path") == owner["path"]]
-    observed += [(entry["at"], entry["baseline"]["content"]) for entry in owner.get("rework_history", []) if entry.get("baseline")]
-    if not observed:
-        return None
-    at, content = max(observed, key=lambda item: parse_instant(item[0], "Observation time"))
-    return {"at": at, "content": content}
+    events = [(report["at"], "set", report["snapshot"]["content"], None) for report in owner.get("reports", []) if report.get("snapshot")]
+    events += [(entry["at"], "set", entry["baseline"]["content"], None) for entry in owner.get("rework_history", []) if entry.get("baseline")]
+    events += [(gate["at"], "gate", gate["after"]["content"], gate["snapshot"]["content"]) for gate in run["gates"]
+               if gate.get("task") == task_id and (gate.get("after") or {}).get("path") == owner["path"]]
+    baseline = None
+    for at, kind, content, before in sorted(events, key=lambda item: parse_instant(item[0], "Observation time")):
+        if kind == "set" or (baseline and before == baseline["content"]):
+            baseline = {"at": at, "content": content}
+    return baseline
 
 
 def _pre_dispatch_content(run: dict, task_id: str, owner: dict, snap: dict) -> None:
@@ -895,16 +936,20 @@ def _journal_evidence(found: dict) -> dict:
 def import_task_report(root, task_id: str, *, journal=None, search_root=None, expected_revision=None) -> dict:
     """Accept a workflow dispatch's result from the host-written journal, which supplies the agent identity."""
     import workflow_journal
-    owner = load(root)["tasks"].get(task_id)
+    run = load(root)
+    host = workflow_host(run)
+    owner = run["tasks"].get(task_id)
     agent = (owner or {}).get("agent") or {}
     require(owner and owner["status"] == "DISPATCHED" and agent.get("via_workflow"), "not_workflow_dispatch", "Only a dispatched task registered with --via-workflow imports its result from a workflow journal.")
     dispatch_id = agent["dispatch_id"]
-    matches = workflow_journal.find_results(lambda result: result.get("dispatch_id") == dispatch_id, journal=journal, search_root=search_root)
+    matches = workflow_journal.find_results(lambda result: result.get("dispatch_id") == dispatch_id, journal=journal, search_root=search_root, host=host)
     require(matches, "journal_result_missing", "No workflow journal result names this dispatch_id; wait for the actual return or query the host.")
     require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results name this dispatch_id; select the exact journal after inspecting them.")
     found = matches[0]
     with transaction(root, "task_report_imported", expected_revision) as run:
         _collection_state(run)
+        require(workflow_host(run) == host, "host_root_changed", "The run's workflow host root changed while the journal was searched.")
+        run.setdefault("workflow_host_root", host)
         owner = run["tasks"].get(task_id)
         current = (owner or {}).get("agent") or {}
         require(owner and owner["status"] == "DISPATCHED" and current.get("via_workflow") and current.get("dispatch_id") == dispatch_id, "not_workflow_dispatch", "The workflow dispatch changed while its journal was searched; search again.")
@@ -1172,6 +1217,8 @@ def review(root, actor: str, verdict: str, evidence: str, *, task_id: str | None
         owner = run["tasks"].get(task_id) if task_id is not None else None
         require(not ((owner or {}).get("agent") or {}).get("via_workflow"), "workflow_review_required",
                 "A task implemented through a workflow dispatch is reviewed only through review-token and review-import.")
+        require(not _pending_request(run, task_id), "workflow_review_required",
+                "Review tokens are open for this target; import their verdicts with review-import instead of typing a review.")
         _record_review(run, root, actor, verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys)
     return load(root)
 
@@ -1198,9 +1245,18 @@ def _token(run: dict, request: dict, lens: str) -> str:
     return "review-" + digest({"run": run["root"], "lens": lens, "request": request["request"], **request["identity"]})[:32]
 
 
-def _open_request(run: dict, task_id: str | None) -> dict | None:
+def _pending_request(run: dict, task_id: str | None) -> dict | None:
+    """An open review request of the current plan version for this target, whatever content it was issued for."""
     request = run.get("review_requests", {}).get(_review_target(task_id))
-    if request and request["status"] == "open" and request["identity"] == _review_identity(run, task_id):
+    if request and request["status"] == "open" and request["identity"].get("plan_hash") == run.get("plan_hash") \
+            and request["identity"].get("spec_version") == run.get("spec_version"):
+        return request
+    return None
+
+
+def _open_request(run: dict, task_id: str | None) -> dict | None:
+    request = _pending_request(run, task_id)
+    if request and request["identity"] == _review_identity(run, task_id):
         return request
     return None
 
@@ -1210,7 +1266,8 @@ def review_token(root, *, task_id: str | None = None, lens: str = "default", exp
 
     Requests are recorded per target: every lens issued for the same content and reviewed result
     joins one open request, and review-import must import all of them together. A changed content,
-    report or fix, or an import of the request, starts a new request with new tokens.
+    report or fix, or an import of the request, starts a new request with new tokens; a new request
+    that supersedes an open one keeps all of its lenses.
     """
     lens = identifier(lens)
     with transaction(root, "review_token_issued", expected_revision) as run:
@@ -1218,9 +1275,13 @@ def review_token(root, *, task_id: str | None = None, lens: str = "default", exp
         request = _open_request(run, task_id)
         if request is None:
             previous = run.setdefault("review_requests", {}).get(_review_target(task_id))
+            # Superseding an open request of this plan version never drops a lens: each one must be reviewed again and imported.
+            carried = sorted(previous["lenses"]) if previous and _pending_request(run, task_id) else []
             if previous:
                 run.setdefault("review_request_history", []).append({**previous, "status": "superseded" if previous["status"] == "open" else previous["status"]})
             request = {"target": task_id, "identity": _review_identity(run, task_id), "request": run["revision"] + 1, "status": "open", "lenses": {}, "at": now()}
+            for kept in carried:
+                request["lenses"][kept] = _token(run, request, kept)
             run["review_requests"][_review_target(task_id)] = request
         request["lenses"].setdefault(lens, _token(run, request, lens))
         issued = {"token": request["lenses"][lens], "task": task_id, "lens": lens, "content": request["identity"]["content"],
@@ -1248,6 +1309,7 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     require(isinstance(lenses, (list, tuple)) and lenses and len(set(lenses)) == len(lenses), "invalid_lens", "Name one or more distinct review lenses.")
     decision, finding_keys = triage(decision, finding_keys)
     run = load(root)
+    host = workflow_host(run)
     request = _open_request(run, task_id)
     require(request, "review_not_requested", "No review-token request is open for the current content; request tokens with review-token first.")
     extra = sorted(set(lenses) - set(request["lenses"]))
@@ -1256,12 +1318,14 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     require(not missing, "review_lenses_incomplete", "Import every lens issued for the current content in one call; missing: " + ", ".join(missing))
     tokens = {request["lenses"][lens]: lens for lens in lenses}
     found = {lens: [] for lens in lenses}
-    for match in workflow_journal.find_results(lambda result: result.get("review_token") in tokens, journal=journal, search_root=search_root):
+    for match in workflow_journal.find_results(lambda result: result.get("review_token") in tokens, journal=journal, search_root=search_root, host=host):
         found[tokens[match["result"]["review_token"]]].append(match)
     for lens, matches in found.items():
         require(matches, "journal_result_missing", f"No workflow journal result carries the current review token for lens {lens}; request review of the current content.")
-        require(len(matches) == 1, "journal_result_ambiguous", f"{len(matches)} workflow journal results carry the review token for lens {lens}; select the exact journal.")
-    results = [_lens_result(lens, found[lens][0]) for lens in lenses]
+        agents = [match["agent_id"] for match in matches]
+        require(len(set(agents)) == len(agents), "journal_result_ambiguous", f"One reviewer agent returned several results for lens {lens}; inspect them before importing.")
+    # Several verdicts for one token from distinct agents are all imported; the worst one counts.
+    results = [_lens_result(lens, match) for lens in lenses for match in found[lens]]
     verdict = "FAIL" if any(item["verdict"] == "FAIL" for item in results) else "PASS"
     keys = {f"{str(d.get('file', '')).strip().lower()}|{str(d.get('kind', '')).strip().lower()}" for item in results if item["verdict"] == "FAIL" for d in item["defects"]}
     finding_keys = sorted((keys - {"|"}) | set(finding_keys))
@@ -1269,18 +1333,21 @@ def import_review(root, *, lenses, task_id: str | None = None, journal=None, sea
     review_evidence(verdict, evidence)
     actors = [item["actor"] for item in results]
     with transaction(root, "independent_review_imported", expected_revision) as run:
+        require(workflow_host(run) == host, "host_root_changed", "The run's workflow host root changed while the journal was searched.")
+        run.setdefault("workflow_host_root", host)
         current = _open_request(run, task_id)
         require(current and current["request"] == request["request"] and current["lenses"] == request["lenses"], "stale_review_token", "The reviewed content or its review request changed while the journal was searched; request review of the current content.")
         writers = _writer_actors(run)
         writer_agents = {actor.split("/", 1)[1] for actor in writers if actor.startswith("workflow-agent:") and "/" in actor}
         agents = [item["journal"]["agent_id"] for item in results]
-        require(len(set(agents)) == len(agents) and len(set(actors)) == len(actors), "reviewer_not_independent", "Each review lens needs a distinct reviewer agent.")
+        require(len(set(agents)) == len(agents) and len(set(actors)) == len(actors), "reviewer_not_independent", "Each review lens and each verdict needs a distinct reviewer agent.")
         require(not writers.intersection(actors) and not writer_agents.intersection(agents), "reviewer_not_independent", "A reviewer must not be a current or previous implementation actor.")
         used = run.setdefault("accepted_review_events", {})
         lines = [item["journal"]["line_sha256"] for item in results]
         require(not used.keys() & set(lines), "review_event_reused", "This workflow review result was already recorded; request a fresh review.")
         _record_review(run, root, "+".join(actors), verdict, evidence, task_id=task_id, decision=decision, finding_keys=finding_keys,
-                       extra={"reviewers": actors, "lenses": list(lenses), "source": "workflow-journal"})
+                       extra={"reviewers": actors, "lenses": list(lenses), "verdicts": [{"lens": item["lens"], "actor": item["actor"], "verdict": item["verdict"]} for item in results],
+                              "source": "workflow-journal"})
         for item in results:
             used[item["journal"]["line_sha256"]] = {"task": task_id, "lens": item["lens"], "actor": item["actor"], "revision": run["revision"] + 1}
         run["review_requests"][_review_target(task_id)] = {**current, "status": "imported", "imported_at": now()}
@@ -1477,11 +1544,18 @@ def _budget_grant(run: dict, blocker: dict) -> dict | None:
                  and grant.get("plan_hash") == run.get("plan_hash") and grant.get("spec_version") == run.get("spec_version")), None)
 
 
+def _decision_grant(run: dict, blocker: dict) -> dict | None:
+    return next((grant for grant in run.get("decision_grants", []) if grant.get("task") == blocker.get("task")
+                 and grant.get("blocker_at") == blocker.get("at") and grant.get("code") == blocker.get("code")
+                 and grant.get("plan_hash") == run.get("plan_hash") and grant.get("spec_version") == run.get("spec_version")), None)
+
+
 def resume(root, resolution: str, expected_revision=None) -> dict:
     with transaction(root, "resumed", expected_revision) as run:
         require(run["state"] == "BLOCKED" and run["blocker"], "not_blocked", "No blocker is recorded.")
         blocker = run["blocker"]
-        require(blocker.get("code") != "requirements_finding", "revision_required", "A requirements finding is resolved by revise and renewed approval, not by resume.")
+        require(blocker.get("code") not in DECISION_BLOCKERS or _decision_grant(run, blocker), "decision_required",
+                "A requirements or human-decision block resumes only after authorize --scope decision --code <blocker code> records the user's decision for this block; otherwise revise.")
         require(blocker.get("code") not in BUDGET_BLOCKERS or _budget_grant(run, blocker), "rework_budget_required",
                 "An exhausted or non-converging rework budget resumes only after authorize --scope rework-budget recorded for this block; otherwise revise.")
         text(resolution, "Observed blocker resolution")
@@ -1576,28 +1650,39 @@ def rework(root, task_id: str, reason: str, expected_revision=None, *, decision=
 
 
 def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dict:
-    """End a dispatch that will not return a usable result, keeping its worktree as the new rework baseline.
+    """End a dispatch that will not return a usable result, preserving its worktree.
 
-    For a workflow dispatch the host journals are read first: failed agents under the task's
-    implement label are recorded (and kept as possible writers), and so is whether any result
-    names the dispatch. The round counts toward the task's test-plan/environment budget.
+    For a workflow dispatch the run's recorded host journals are read first: failed agents under
+    the task's implement label are recorded (and kept as possible writers), and so is whether any
+    result names the dispatch. The round counts toward the task's test-plan/environment budget.
+    Normally the task returns to REWORK with its current content as the new rework baseline. If
+    the worker committed or switched branches, the observed HEAD and branch are recorded without
+    reading its content, and the task is INVALIDATED so task-prepare creates a new attempt.
     """
     import workflow_journal
     reason = text(reason, "Reason for abandoning the dispatch")
-    owner = load(root)["tasks"].get(task_id)
+    run = load(root)
+    owner = run["tasks"].get(task_id)
     agent = (owner or {}).get("agent") or {}
     require(owner and owner["status"] == "DISPATCHED", "task_state", "Only a dispatched task can be abandoned.")
     observed = None
     if agent.get("via_workflow"):
+        pinned = run.get("workflow_host_root") or str(workflow_journal.host_root())
         since = parse_instant(agent["registered_at"], "Dispatch registration time").timestamp() - 1
-        observed = workflow_journal.observe_dispatch(f"implement:{task_id}", agent["dispatch_id"], since=since)
+        observed = workflow_journal.observe_dispatch(f"implement:{task_id}", agent["dispatch_id"], since=since, host=pinned)
+        observed["effective_host_root"] = str(workflow_journal.host_root())
     with transaction(root, "task_dispatch_abandoned", expected_revision) as run:
         _collection_state(run)
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] == "DISPATCHED" and owner["agent"]["dispatch_id"] == agent["dispatch_id"], "task_state", "The dispatch changed while the journals were read; inspect the task again.")
-        owned_worktree_record(run, owner, task_id=task_id)
-        snap = snapshot(run, task_id)
+        receipt = _load_worktree_receipt(run, "task-" + task_id, owner.get("attempt", 0))
+        require(all(owner.get(key) == receipt[key] for key in ("path", "branch", "ownership_receipt")), "worktree_identity", "The current worktree owner differs from its durable creation record.")
+        identity = git_ops.inspect_repo(owner["path"])
+        require(identity["primary"] == run["primary"] and identity["worktree"] == owner["path"], "worktree_identity", "The recorded worktree repository or exact path changed.")
+        moved = identity["branch"] != owner["branch"] or identity["head"] != owner["base_sha"]
         record = {"reason": reason, "at": now(), "journal": observed}
+        if moved:
+            record["moved"] = {"head": identity["head"], "branch": identity["branch"], "expected_head": owner["base_sha"], "expected_branch": owner["branch"]}
         owner["agent"].update(liveness="abandoned", abandoned=copy.deepcopy(record))
         if owner.get("dispatches"):
             owner["dispatches"][-1].update(liveness="abandoned", abandoned=copy.deepcopy(record))
@@ -1605,9 +1690,18 @@ def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dic
             if failed.get("agent_id") and workflow_journal.AGENT_ID.fullmatch(str(failed["agent_id"])):
                 run.setdefault("writer_history", []).append({"actor": f"workflow-agent:{failed['run_id']}/{failed['agent_id']}", "task": task_id, "attempt": owner["attempt"],
                                                              "dispatch_id": agent["dispatch_id"], "abandoned": True, "journal": failed})
-        owner.setdefault("rework_history", []).append({"reason": reason, "report": None, "patch": None, "at": record["at"], "decision": "abandon",
-                                                       "finding_keys": [], "baseline": snap, "abandoned_dispatch": agent["dispatch_id"], "journal": observed})
-        owner["status"] = "REWORK"
+        entry = {"reason": reason, "report": None, "patch": None, "at": record["at"], "decision": "abandon",
+                 "finding_keys": [], "abandoned_dispatch": agent["dispatch_id"], "journal": observed}
+        if moved:
+            # The worker's commits stay on the preserved worktree; the next attempt starts from a fresh one.
+            entry["moved"] = record["moved"]
+            owner.setdefault("rework_history", []).append(entry)
+            owner["status"] = "INVALIDATED"
+            owner["invalidated_by"] = {"task": task_id, "reason": reason, "at": record["at"], "abandoned": True, "moved": record["moved"]}
+        else:
+            entry["baseline"] = snapshot(run, task_id)
+            owner.setdefault("rework_history", []).append(entry)
+            owner["status"] = "REWORK"
         _count_support_round(run, task_id, owner)
     return load(root)
 
@@ -1632,6 +1726,7 @@ def status(root) -> dict:
     result["retained_versions"] = len(run.get("previous_versions", []))
     result["gate_jobs"] = {key: {"status": job["status"], "task": job.get("task"), "case": job.get("case"), "resources": job.get("resources", [])} for key, job in run.get("gate_jobs", {}).items()}
     result["delivery_mode"] = run.get("delivery_mode", "github")
+    result["workflow_host_root"] = run.get("workflow_host_root")
     result["local_outcome"] = run.get("local_outcome")
     result["fix_budget"] = fix_budget(run)
     result["next_action"] = {

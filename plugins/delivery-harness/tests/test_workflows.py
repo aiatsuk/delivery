@@ -7,14 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 from tests.test_run_engine import RunFixture, SCRIPTS, e, git
 
@@ -136,11 +134,7 @@ class WorkflowEndToEndTests(RunFixture):
 
     def setUp(self):
         super().setUp()
-        self.host = self.home / "host-projects"
-        self.host.mkdir()
-        environment = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.host)})
-        environment.start()
-        self.addCleanup(environment.stop)
+        self.host = self.host_root
 
     def cli(self, *arguments):
         result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "delivery.py"), *map(str, arguments)], cwd=self.home, capture_output=True, text=True)
