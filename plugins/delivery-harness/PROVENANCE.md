@@ -11,17 +11,18 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 | spec-driven-development | 1.0.0 | Specification/check engine, templates, technical references and regressions; exact source hashes in its engine guide |
 | product-driven-development | 0.5.0 | Markdown model and bounded session evidence helper/tests; provenance in internal/product |
 | ai-factory | 1.0.1 | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
-| orchestrate | 0.5.0 (225818ce57741831f9c224f1d03d247b9d6fce7e) | Dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
+| orchestrate | 0.7.0 (3e5886aba4d3f6b6b9bb9f8f056cdafc2be91400) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
 
 No license file was present in the inspected spec/product/factory repositories. No
-upstream orchestration shell implementation was copied. The new implementation
+upstream orchestration shell implementation was copied; since 1.3.0 the orchestrate
+execution-loop workflow script is shipped verbatim (MIT) and driven by this engine. The new implementation
 does not assert a blanket license for material without a supplied license notice.
 Names here identify source workflows and supported hosts, not repository authorship.
 
 The public spec/product/factory pins match the source skill trees previously used
 for the integration byte-for-byte. Orchestrate is selectively reviewed through
-0.5.0 as described below. Source pins alone do not replace runtime implementations
+0.7.0 as described below. Source pins alone do not replace runtime implementations
 or imply adoption of later upstream updates.
 
 ## Explicit conflict resolutions
@@ -112,3 +113,22 @@ an audit of nine real runs and adopt mechanisms from the integrated sources:
 
 Workflow journals are host-written provenance, not authentication. Model pins
 remain excluded: the workflows inherit the configured model unless the user selects one.
+
+## One execution loop (1.3.0, orchestrate 0.7.0)
+
+Delivery and orchestrate had two separate execution loops: this bundle shipped its
+own one-shot dispatch and review workflows and left rework to the coordinator,
+while orchestrate kept implement, gate, review and rework in code. Orchestrate 0.7.0
+added an external-authority mode to its loop (its `references/authority.md`), and
+this bundle now ships that script byte for byte (`workflows/orchestrate-execute.js`,
+checked against the pinned submodule by the tests) instead of its own scripts.
+
+`scripts/workflow_steps.py` is the authority side: it builds the loop's arguments
+and maps each loop step onto the existing engine commands (`task-prepare`,
+`task-register --via-workflow`, `task-import`/`task-abandon`, `gate`, `task-rework`,
+`review-token`, `review-import`). The engine stays the only state owner and the only
+judge of budgets and convergence; orchestrate's tier escalation, tie-break and
+model routing are not used under Delivery, which keeps inheriting the configured
+model. `task-abandon` also recognizes the loop's implementer labels. Orchestrate's
+Codex runner refuses authority arguments, so Codex keeps the native-agent path.
+

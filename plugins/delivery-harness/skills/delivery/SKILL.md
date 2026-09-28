@@ -111,17 +111,20 @@ the host reference, not an untracked shell process or a second competing harness
 Use configured/inherited models unless the user explicitly selects a model; there
 are no hidden tier pins. Ask once if required capabilities or cost authority are missing.
 
-On a host with a workflow runtime (Claude Code), dispatch and review through the
-shipped workflows, so agent identity and results come from the host journal
+On a host with a workflow runtime (Claude Code), run the shared execution loop,
+so every step is code and agent identity and results come from the host journal
 instead of typed text (details in the host reference):
 
-- `task-prepare`, then `task-register --via-workflow` for each ready task, then run
-  `delivery-implement` workflow (by name, see the host reference) with each task's dispatch ID, worktree,
-  contract, owned paths, acceptance and gates; `task-import` each task afterwards,
-  or `task-abandon` a dispatch the workflow ended without an importable result.
-- One `review-token` per lens (conformance; add `adversary` for concurrency,
-  async, retries or data, `security` for authority or input handling), run
-  `delivery-review` workflow, then `review-import --lens …` per target.
+- `scripts/workflow_steps.py --run ROOT args [--task T …] --lens conformance
+  [--lens adversary] [--lens security]` prints the loop's arguments (adversary for
+  concurrency, async, retries or data; security for authority or input handling).
+- Launch the `orchestrate-execute` workflow with that object as `args`. Per task it
+  prepares, registers each dispatch, imports each result, runs the planned gates,
+  records rework, issues review tokens and imports the verdicts through the
+  engine. The engine's budgets decide; a refusal ends the task BLOCKED with its reason.
+- After `integrate` and the integrated gates, `args --integration` runs the
+  integrated review the same way. Read `status` after every loop; never redo a
+  step the loop recorded.
 
 Otherwise, for each dependency-ready task:
 
