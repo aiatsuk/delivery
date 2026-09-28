@@ -780,9 +780,11 @@ def finish_local(root, expected_revision=None, *, fast_forward=False):
     are retired with the same checks and recovery as ``cleanup``. With explicit
     local-merge authority, main is fast-forwarded to the exact committed head and
     the integration tree is retired too. Every branch is preserved. A tree whose
-    removal is blocked only by ignored, untracked or empty-directory artifacts
-    (for example gate caches) is kept and listed in
-    ``local_outcome.preserved_worktrees``; changed tracked content still blocks.
+    removal is blocked only by ignored files or empty directories (for example
+    gate caches) is kept and listed in ``local_outcome.preserved_worktrees``.
+    Untracked files that are not ignored are part of the task's content, so they
+    fail closed like changed tracked content: the tree no longer matches its
+    review and finish-local refuses instead of keeping it.
     """
     engine.require(type(fast_forward) is bool, "invalid_input", "fast_forward must be true or false.")
     current = engine.load(root)

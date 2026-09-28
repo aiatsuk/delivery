@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/delivery/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -42,6 +44,12 @@ class RunFixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="delivery-run-test-")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name).resolve()
+        # Every fixture run records a temporary workflow host root, never the real home directory.
+        self.host_root = self.home / "host-projects"
+        self.host_root.mkdir()
+        host = mock.patch.dict(os.environ, {"DELIVERY_WORKFLOW_HOST_ROOT": str(self.host_root)})
+        host.start()
+        self.addCleanup(host.stop)
         self.remote, self.repo = self.home / "origin.git", self.home / "project"
         subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(self.remote)], check=True, capture_output=True)
         subprocess.run(["git", "clone", str(self.remote), str(self.repo)], check=True, capture_output=True)
