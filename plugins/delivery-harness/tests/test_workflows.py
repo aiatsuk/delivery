@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.test_run_engine import RunFixture, SCRIPTS, e, gate, git, plan
 
@@ -109,6 +110,9 @@ class LoopTests(RunFixture):
         labels = self.labels(out)
         self.assertIn("rework:value:L0r2", labels)
         self.assertIn("Missing edge case", next(c["prompt"] for c in out["calls"] if c["label"] == "rework:value:L0r1"))
+        owner = e.load(self.root)["tasks"]["value"]
+        self.assertEqual(["code-fix", "abandon"], [entry["decision"] for entry in owner["rework_history"][:2]])
+        self.assertEqual(self.result(out)["status"] == "PASS", owner["status"] == "VERIFIED")
 
     def test_the_engine_budget_blocks_a_non_converging_task(self):
         self.begin()
@@ -160,6 +164,53 @@ class LoopTests(RunFixture):
         self.assertEqual("PASS", out["result"]["integration"]["status"], out["result"]["integration"].get("reason"))
         review = e.load(self.root)["reviews"][-1]
         self.assertEqual((None, "PASS"), (review["task"], review["verdict"]))
+
+
+class StepClassificationTests(unittest.TestCase):
+    """Which engine refusals block the task and which send it back to rework (engine calls mocked)."""
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_steps
+        self.steps = workflow_steps
+        self.args = mock.Mock(run="/run", task="value", label="task-value-r0", reason="r", key=None)
+
+    def test_a_gate_refusal_blocks_instead_of_counting_as_a_red_gate(self):
+        plan_run = {"plan": {"tasks": [{"id": "value", "paths": ["value.txt"], "gates": [gate()]}]}, "tasks": {"value": {"path": "/wt"}}}
+        with mock.patch.object(self.steps, "run_state", return_value=plan_run), \
+                mock.patch.object(self.steps, "delivery", return_value=(False, {"code": "resource_recovery_required", "message": "recover job"})):
+            out = self.steps.step_gate(self.args)
+        self.assertIn("resource_recovery_required", out["blocked"])
+        self.assertEqual({"exit_code", "tail", "tree", "head", "results", "unstaged", "untracked", "outside_scope", "blocked"}, set(out))
+
+    def test_a_journal_problem_blocks_without_abandoning(self):
+        calls = []
+        def fake(*arguments):
+            calls.append(arguments[0])
+            return False, {"code": "journal_missing", "message": "no host root"}
+        with mock.patch.object(self.steps, "delivery", side_effect=fake):
+            out = self.steps.step_collect(self.args)
+        self.assertEqual((["task-import"], False), (calls, out["accepted"]))
+        self.assertIn("journal_missing", out["blocked"])
+
+    def test_a_refused_result_is_abandoned_and_reworked(self):
+        calls = []
+        def fake(*arguments):
+            calls.append(arguments[0])
+            if arguments[0] == "task-import":
+                return False, {"code": "scope_violation", "message": "outside"}
+            return True, {"tasks": {"value": {"status": "REWORK"}}}
+        with mock.patch.object(self.steps, "delivery", side_effect=fake), mock.patch.object(self.steps, "blocker", return_value=""):
+            out = self.steps.step_collect(self.args)
+        self.assertEqual((["task-import", "task-abandon"], False, None), (calls, out["accepted"], out.get("blocked")))
+
+    def test_an_unexpected_error_prints_an_object_every_step_schema_accepts(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stdout") as stdout:
+            code = self.steps.main(["--run", tmp, "gate", "--task", "value"])
+        out = json.loads("".join(call.args[0] for call in stdout.write.call_args_list))
+        self.assertEqual(2, code)
+        for schema in (self.steps.GATE, self.steps.FINISH, self.steps.STEP):
+            self.assertTrue(set(schema["required"]) <= set(out), schema["required"])
 
 
 if __name__ == "__main__":
