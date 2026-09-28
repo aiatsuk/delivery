@@ -81,7 +81,8 @@ explicit parent dependency/release plan; this CLI never merges across repositori
 
 Every plan includes a goal, concrete non-goals, observable requirements/oracles,
 resolved decisions, owned paths, task dependencies, exclusive resources, task
-gate commands, integrated cases, explicit side-effect risks and cleanup.
+gate commands, integrated cases, explicit side-effect risks and cleanup. An
+oracle names an observable result; a bare status such as "exit 0" is refused.
 Map every requirement to a task and an integrated case. Serialize shared paths
 or resources. Use tasks small enough to return one testable, independently
 reviewable change. Do not split one indivisible edit just to use more agents.
@@ -94,7 +95,11 @@ Medium/Large: initialize the bundled spec using `spec -- init`, fill its plannin
 artifacts with repository evidence and requirement IDs, follow its guarded phases
 to WAITING_APPROVAL, and present a concise brief. Keep its expected scope and the
 run plan consistent. Obtain actual semantic approval; `approve` binds the run
-plan and rich baseline together. Record implementation authority separately, then
+plan and rich baseline together. Only when the user actually granted a standing
+approval (`authorize --scope standing-approval --until … --max-level … [--trigger …]`)
+may a plan inside its level, triggers and expiry be approved with
+`approve --standing` and a written materiality note; it is recorded as standing,
+never as the user's individual approval, and anything beyond it stops for one. Record implementation authority separately, then
 `start`. If intent, constraints or scope change, use `revise`; no editing of state
 JSON, no reusing old approval. Preserve old artifacts and worktrees.
 
@@ -106,7 +111,19 @@ the host reference, not an untracked shell process or a second competing harness
 Use configured/inherited models unless the user explicitly selects a model; there
 are no hidden tier pins. Ask once if required capabilities or cost authority are missing.
 
-For each dependency-ready task:
+On a host with a workflow runtime (Claude Code), dispatch and review through the
+shipped workflows, so agent identity and results come from the host journal
+instead of typed text (details in the host reference):
+
+- `task-prepare`, then `task-register --via-workflow` for each ready task, then run
+  `workflows/delivery-implement.js` with each task's dispatch ID, worktree,
+  contract, owned paths, acceptance and gates; `task-import` each task afterwards,
+  or `task-abandon` a dispatch the workflow ended without an importable result.
+- One `review-token` per lens (conformance; add `adversary` for concurrency,
+  async, retries or data, `security` for authority or input handling), run
+  `workflows/delivery-review.js`, then `review-import --lens …` per target.
+
+Otherwise, for each dependency-ready task:
 
 1. `task-prepare` creates its worktree and an external task JSON contract.
 2. Spawn a real worker with that exact worktree, owned paths, acceptance, gates,
@@ -123,8 +140,14 @@ For each dependency-ready task:
 6. Request a separate real read-only reviewer. It reruns gates as appropriate and
    reviews the actual diff, acceptance, risk and evidence. Register its PASS/FAIL
    with `review --task …`; it must never be any current or prior implementer.
-7. On failure, return concrete findings to the owning task. Two rework rounds are
-   allowed. Revisit the plan or request explicit escalation after that; never
+7. On failure, return concrete findings to the owning task with a decision and
+   finding keys (`file|kind`): `code-fix` uses the two implementer rework rounds;
+   `test-plan` and `environment` have their own two, since the implementer is not
+   at fault; `requirements` and `human` block until the user decides (recorded with
+   `authorize --scope decision`) or the plan is revised. A
+   key that survives a code-fix round blocks as non-converging; only a user's
+   `authorize --scope rework-budget` lets such a block resume. A PASS needs
+   evidence per acceptance item and per rerun gate, not a one-line verdict. Never
    relabel a failure as a pass. Dependency changes invalidate descendant evidence.
 
 Parallelize only independent ready tasks and respect explicit resource ownership.
@@ -168,6 +191,12 @@ instructions or an applicable explicit repository workflow; record its source.
 or updates this run's owned PR. Write English change descriptions without agent
 attribution. Summarize what changed, why, evidence, failures/omissions and risks.
 
+A local-only run (`new --local-only`, for a repository without a usable origin or
+when the user asked for local work) starts from the clean local main without
+fetching, refuses publish, refresh, merge and cleanup, and ends after `commit` with
+`finish-local`; `--fast-forward-main` additionally needs `local-merge` authority
+and a main still at the run's base.
+
 Stop at PR_OPEN until review and explicit merge authorization for that exact PR.
 An earlier task's merge permission, a green check, or an unattended heartbeat is
 not merge permission. Deployment is outside this workflow and never automatic.
@@ -176,7 +205,8 @@ not merge permission. Deployment is outside this workflow and never automatic.
 
 On review findings, fix only within the approved scope. Spawn a real worker for
 the existing integration worktree, record it with `fix-register`, send its new
-dispatch ID, and collect `fix-report`. Rerun invalidated checks and obtain new
+dispatch ID, and collect `fix-report`. Two fix rounds are allowed; only the user's
+explicit `authorize --scope fix-budget --count N` extends that for the current plan. Rerun invalidated checks and obtain new
 independent review; `ready`, `commit` and `publish` update the same owned PR.
 Do not push unreviewed conflict resolutions.
 After explicit authorization, `refresh` fetches current main and rebases the owned

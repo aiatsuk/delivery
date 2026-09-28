@@ -93,3 +93,22 @@ Compared 6117a3461c15282949cecbea2c1f62d5d3967099 through
 
 The release contract and runtime code are unchanged, so the plug-in retains 1.1.0.
 The source review record binds this update to its inspected commit and mapped files.
+
+## Execution control (1.2.0)
+
+Local changes, not an upstream update; every source pin is unchanged. They follow
+an audit of nine real runs and adopt mechanisms from the integrated sources:
+
+- AI Factory: the finding decision catalogue (code fix, test plan, environment,
+  requirements, human) with separate bounded loops, and escalation when the same
+  finding survives a fix, re-expressed as engine decisions and blocker codes.
+- Spec-driven development: approval bound to exact content and scope, applied to a
+  bounded standing approval that cannot widen past its level, triggers or expiry,
+  and the rule that an oracle is an observable result, not a status.
+- Orchestrate: the execution loop driven by host workflow scripts with
+  schema-checked results and one agent per review lens, and the gate triage that
+  separates environment problems from implementer defects. The workflows stay thin;
+  the engine remains the only state owner and imports results from the host journal.
+
+Workflow journals are host-written provenance, not authentication. Model pins
+remain excluded: the workflows inherit the configured model unless the user selects one.

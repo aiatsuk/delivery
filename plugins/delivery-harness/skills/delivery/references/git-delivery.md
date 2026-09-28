@@ -5,6 +5,20 @@ platform repository's instructions. It assumes a non-bare Git repository, a clea
 primary checkout, `origin`, and `main`. A repository with another policy needs an
 explicit adapter; do not quietly rename its base or rewrite history.
 
+## Local-only runs
+
+`new --local-only` records `delivery_mode: local`. `start` then requires a clean
+primary already on `main` (it never switches branches: `LOCAL_BASE_BRANCH`) and
+uses local HEAD as the base without fetching; a local main ahead of any origin is
+fine. Everything up to `ready` and `commit` is unchanged. `publish`, `refresh`,
+`merge` and `cleanup` refuse local runs (`local_only_run`). `finish-local` ends
+the run: it retires the owned clean task worktrees with the cleanup checks, keeps
+every branch, records `local_outcome` and the bound product note, and sets
+COMPLETE. With `--fast-forward-main` it also needs `local-merge` authority, refuses
+when main moved from the run's base (`main_moved`; local rebase is not automated),
+fast-forwards main to the committed integration head, and retires the integration
+worktree too. Retries continue from the recorded phase with the same choice.
+
 ## Prepare and integrate
 
 Inspect all worktrees and preserve existing changes. Fetch origin/main, reject

@@ -69,3 +69,24 @@ maintainer-controlled and are not changed by repository scripts.
 Actual interactive Claude execution is unavailable in the local environment.
 Direct script/schema checks are not a fresh full native-host delivery run. No
 real PR merge, deployment or production-side action is part of validation.
+
+## 1.2.0 execution control, September 27 and 28, 2026
+
+- Plug-in suite: 504/504 passed, run in six parallel shards with
+  `tools/run_test_shard.py` (about nine minutes). New modules:
+  `test_execution_control`, `test_local_mode`, `test_workflows`; gate-runner and
+  integration-fix regressions extended.
+- Each new rule was mutation-checked by its implementer: removing the rule made
+  its named test fail.
+- An independent read-only review ran in rounds, each reproducing its findings
+  against the code; every defect it reported (stuck dispatches, forged or dropped
+  verdicts, budget and decision bypasses, host-root substitution, re-rolled
+  reviews) was fixed and re-verified before the review records were renewed.
+- Live host runs: two local-only runs (the second on the final code) on throwaway
+  repositories through the shipped
+  `delivery-implement` and `delivery-review` workflows in Claude Code 2.1.283,
+  journal imports from the real host journal, two-lens task review, integrated
+  review, commit and `finish-local --fast-forward-main`; state COMPLETE.
+- Not verified: Codex and Cursor hosts with the new commands; live GitHub
+  publication of a workflow-dispatched run; Linux process-identity paths of the
+  gate runner changes.

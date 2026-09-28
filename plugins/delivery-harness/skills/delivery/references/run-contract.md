@@ -5,6 +5,7 @@
 | Concern | Authority | It does not authorize |
 | --- | --- | --- |
 | Intent and material choices | Actual user input plus approved semantic fingerprint | External effects or deployment |
+| Standing approval | A user-granted scope (expiry at most 30 days, maximum level, allowed triggers) | Plans beyond that scope, or an individual approval record |
 | Product context | Explicitly selected Markdown product/work item | Invented product decisions or implicit session access |
 | Scope and risk | Versioned plan, requirements and classification | Lowering hard triggers for speed |
 | Implementation | Scoped request or separately recorded authority | Publication or merge unless explicitly included |
@@ -72,6 +73,12 @@ Small request-scoped work can enter IMPLEMENTING without pretending there was
 semantic approval. BLOCKED preserves the prior state and a concrete reason.
 
 Task state is preparation → dispatch → returned report → gates/review → verified.
+A dispatch requires the task worktree unchanged since preparation (first dispatch)
+or since the latest engine observation (the failing report, the after-snapshot of a
+gate that started from that baseline, or an abandon). A `--via-workflow` dispatch has no typed
+identity: `task-import` binds the host journal's agent, handle and result, and a
+manual `task-report` is refused for it. Reviews imported with `review-import` bind
+one journal verdict per lens to a token over the current content.
 A stored handle always requires a host liveness query. Reports bind a dispatch ID,
 not just an actor label. Prior implementation actors remain ineligible to review.
 Dependency receipt changes invalidate consumers; preserve old trees and rebuild
@@ -85,7 +92,9 @@ patch hashes bind the same content. Independent integrated review cannot expand
 the plan's approved path scope.
 
 Each actual gate has a durable job ID, runner/child process identities and a final
-receipt. Nonblocking locks serialize the same gate and shared named resources
+receipt; a passing single-attempt gate writes four checkpoints, and its receipt is
+written in the same checkpoint as the job outcome, so a crash before that point
+leaves no receipt: recover the job, then run the gate again. Nonblocking locks serialize the same gate and shared named resources
 across runs using the same store; disjoint gates may run concurrently. Revisions
 can advance during execution as each job checkpoints. A RUNNING record remains
 an exclusion even if its operating-system lock disappeared in a crash.
@@ -97,8 +106,20 @@ review. Do not edit an executing/finished check plan in place.
 
 ## Failure and recovery
 
-Use two bounded review-fix rounds, then reassess the spec or ask for a concrete
-decision/capability. A partial Git operation is not permission to reset. Durable
+Every finding carries a decision, for task and integrated reviews alike.
+`code-fix` uses two implementer rework rounds; `test-plan`, `environment` and
+abandoned dispatches use two separate support rounds; `requirements` and `human`
+block and resume only after the user's recorded
+`authorize --scope decision --code requirements_finding|human_decision [--task T]`
+(otherwise revise, where no pull request is open); a finding key that
+survives a code-fix round blocks as `non_converging`. Budget and non-convergence
+blocks resume only after `authorize --scope rework-budget [--task T] --count N`
+(1–2, recorded after the block, bound to the plan version); otherwise revise. A
+block raised while blocked stacks, and resume restores the earlier one. Blockers carry these codes in
+`status`. Integrated fixes have two rounds per integration head (a
+refresh onto a new base starts the count again); an explicit `fix-budget` grant adds
+rounds for the current plan hash and specification version only. Oracles must name an observable result; status-only oracles are refused. Then
+reassess the spec or ask for a concrete decision/capability. A partial Git operation is not permission to reset. Durable
 creation/publication receipts permit a safe retry only when identity still matches.
 If an operation completed between Git and state persistence, inspect its exact
 result before reconciling; never adopt an existing path merely because its name fits.

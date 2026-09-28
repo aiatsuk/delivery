@@ -9,13 +9,16 @@ python3 -S -B skills/delivery/scripts/delivery.py doctor
 python3 -S -B -m unittest discover -s tests -t . -q
 ```
 
-The baseline suite has 383 tests using temporary local Git repositories and fake
-publication providers. It does not require initialized upstream submodules or
+The baseline suite has 504 tests using temporary local Git repositories and fake
+publication providers; the workflow-script tests need `node` and are skipped without it. It does not require initialized upstream submodules or
 Python packages. Synthetic fixture actors are not native-host execution evidence.
 
 Manifest/schema validation and direct CLI smoke do not establish a complete
-interactive host run. The local environment has no Claude executable; actual
-Claude execution is not claimed. No live merge, deployment or production effect
+interactive host run. For 1.2.0 one live local-only run on a throwaway repository
+was driven through the shipped workflows in Claude Code 2.1.283 (implementation,
+two-lens task review and integrated review agents), with `task-import` and
+`review-import` reading the real host journal, and ended COMPLETE with an
+authorized fast-forward. That is one run, not a guarantee for every host version. No live merge, deployment or production effect
 is part of the test suite. Existing tests do not authenticate human authority or
 eliminate the remote-base race without repository-side branch protection.
 
