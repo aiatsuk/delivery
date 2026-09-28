@@ -1,0 +1,19 @@
+{
+  "source_revision": "c431b34e4acd6882f3a03635d8aea64bfec6e650",
+  "disposition": "integrated",
+  "rationale": "Local 1.2.0 execution-control change, same pinned source. Adopted from the factory flows: the finding decision catalogue (code fix, test plan, environment, requirements, human) with separate bounded loops, escalation when the same finding survives a fix, and human decisions recorded before a blocked run continues, re-expressed as engine decisions, blocker codes and recorded grants in the unified coordinator.",
+  "reviewer": "Independent read-only review of the 1.2.0 change in seven rounds on September 27 and 28, 2026, each reproducing its findings against the code; every defect it reported was fixed and re-verified, and the final round returned PASS. Review prose does not authenticate identity.",
+  "tests": "Full plug-in suite 504/504 in six parallel shards (tools/run_test_shard.py), mutation checks per new rule, and two live local-only runs through the shipped workflows in Claude Code 2.1.283 that ended COMPLETE; see docs/VALIDATION.md. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/factory-qa-loop/SKILL.md",
+    "skills/factory-gates/SKILL.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py",
+    "plugins/delivery-harness/tests/test_run_engine.py"
+  ]
+}
