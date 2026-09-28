@@ -2,7 +2,7 @@
 
 One product-to-PR workflow, with independently maintained upstream tools and
 explicitly reviewed integrations. The installable plug-in is
-[`plugins/delivery-harness`](plugins/delivery-harness), version 1.1.0.
+[`plugins/delivery-harness`](plugins/delivery-harness), version 1.2.0.
 
 ```text
 Pinned upstream commits → reviewed integration → tested self-contained plug-in
