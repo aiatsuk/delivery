@@ -50,7 +50,7 @@ def parser():
             q.add_argument("--target", action="append", dest="targets", help="Exact task:index or case ID; repeat for each approved side-effect gate.")
             q.add_argument("--count", type=int, help="Extra rounds: 1-3 integration-fix rounds for --scope fix-budget, 1-2 rounds for --scope rework-budget.")
             q.add_argument("--task", help="Task named by the blocker, for --scope rework-budget or decision; omit it for an integrated block.")
-            q.add_argument("--code", choices=sorted(engine.DECISION_BLOCKERS), help="Blocker code the user's decision answers, for --scope decision.")
+            q.add_argument("--code", choices=sorted(engine.DECISION_CODES), help="For --scope decision: the blocker code the user's decision answers, or review_override for a FAIL the user judges wrong.")
             q.add_argument("--until", help="Standing approval end: ISO-8601 with an offset or Z, at most 30 days ahead.")
             q.add_argument("--max-level", choices=["small", "medium", "large"], help="Highest plan level a standing approval covers.")
             q.add_argument("--trigger", action="append", dest="triggers", help="Risk trigger a standing approval covers; repeat for each.")

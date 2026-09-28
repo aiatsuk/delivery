@@ -106,7 +106,12 @@ class WorkflowScriptTests(unittest.TestCase):
 
     def test_review_schema_requires_the_evidence_minimum(self):
         out = self.run_flow("delivery-review", review_args("conformance"), {"review:t1:conformance": [verdict("review-conformance")]})
-        self.assertEqual(out["calls"][0]["schema"]["properties"]["evidence"]["minLength"], 160)
+        evidence = out["calls"][0]["schema"]["properties"]["evidence"]
+        self.assertEqual(evidence["minLength"], 160)
+        import re
+        pattern = re.compile(evidence["pattern"])
+        self.assertTrue(pattern.search(EVIDENCE))
+        self.assertIsNone(pattern.search("x" * 200))
         self.assertIn("at least two such lines and 160 characters", out["calls"][0]["prompt"])
 
     def test_review_runs_one_agent_per_lens_with_its_token(self):

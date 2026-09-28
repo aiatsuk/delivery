@@ -13,14 +13,14 @@ export const meta = {
 
 const A = args
 
-// Mirrors review-import: a PASS needs evidence of at least 160 characters on two or more lines.
+// Mirrors review-import: a PASS needs evidence of at least 160 characters on two or more non-empty lines.
 const TEXT = { type: 'string', minLength: 1 }
 const VERDICT = {
   type: 'object',
   properties: {
     review_token: TEXT,
     verdict: { type: 'string', enum: ['PASS', 'FAIL'] },
-    evidence: { type: 'string', minLength: 160 },
+    evidence: { type: 'string', minLength: 160, pattern: '\\S[^\\n]*\\n+[^\\n]*\\S' },
     defects: {
       type: 'array',
       items: {
