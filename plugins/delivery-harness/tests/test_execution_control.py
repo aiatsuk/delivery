@@ -494,19 +494,23 @@ class ReviewImportTests(ControlFixture):
         self.assertEqual([["evidence", "defects"]], [item.get("normalized") for item in receipt["verdicts"]])
         self.assertEqual(["workflow-agent:wf_fixture-0002/a0fixturerev01"], [item["actor"] for item in receipt["refused"]])
 
-    def test_an_open_request_with_unimported_verdicts_is_not_superseded(self):
+    def test_supersession_proceeds_after_harvesting_and_the_harvested_fail_still_counts(self):
         self.reviewed_ready()
         path = Path(e.load(self.root)["tasks"]["value"]["path"])
-        token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
-        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The staged value misses its newline."))
-        (path / "scratch.txt").write_text("changes the content so a new request would supersede the open one\n")
-        pending = self.assert_code("review_results_pending", e.review_token, self.root, task_id="value", lens="adversary")
-        self.assertIn("conformance: FAIL from workflow-agent:wf_fixture-0002/a0fixturerev01", pending.message)
+        first = e.review_token(self.root, task_id="value", lens="conformance")
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(first["token"], "FAIL", "The staged value misses its newline."))
+        (path / "scratch.txt").write_text("changes the content so a new request supersedes the open one\n")
+        during = e.review_token(self.root, task_id="value", lens="adversary")
+        self.assertEqual(["adversary", "conformance"], during["lenses"])
+        harvested = [item for item in e.load(self.root)["harvested_reviews"] if item["token"] == first["token"]]
+        self.assertEqual([("FAIL", first["content"])], [(item["verdict"], item["snapshot"]["content"]) for item in harvested])
         (path / "scratch.txt").unlink()
-        run = e.import_review(self.root, lenses=["conformance"], task_id="value")
-        self.assertEqual(("FAIL", "REWORK"), (run["reviews"][-1]["verdict"], run["tasks"]["value"]["status"]))
+        after = {name: e.review_token(self.root, task_id="value", lens=name)["token"] for name in ("conformance", "adversary")}
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(after["conformance"]))
+        Journal(self.search, "wf_fixture-0004").agent("a0fixturerev03", lens(after["adversary"]))
+        self.assert_code("review_reroll", e.import_review, self.root, lenses=["conformance", "adversary"], task_id="value")
 
-    def test_refused_or_writer_verdicts_do_not_hold_the_request_open(self):
+    def test_refused_and_writer_verdicts_are_recorded_as_refused_when_harvested(self):
         self.reviewed_ready()
         path = Path(e.load(self.root)["tasks"]["value"]["path"])
         token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
@@ -515,6 +519,10 @@ class ReviewImportTests(ControlFixture):
         (path / "scratch.txt").write_text("changes the content\n")
         issued = e.review_token(self.root, task_id="value", lens="adversary")
         self.assertEqual(["adversary", "conformance"], issued["lenses"])
+        run = e.load(self.root)
+        self.assertEqual([], [item for item in run.get("harvested_reviews", []) if item["token"] == token])
+        self.assertEqual({("workflow-agent:wf_fixture-0002/a0fixturerev01", "review_evidence_insufficient"), (f"workflow-agent:wf_fixture-0003/{IMPLEMENTER}", "writer_verdict")},
+                         {(item["actor"], item["code"]) for item in run["refused_review_events"].values()})
 
 
 
@@ -898,81 +906,124 @@ class RerollTests(ControlFixture):
         self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer-2", "PASS", PASS_EVIDENCE, task_id="value")
 
 
-class PendingVerdictTests(ControlFixture):
-    """Order, not harvest: returned verdicts are imported before their review subject may change."""
+class HarvestTests(ControlFixture):
+    """Every verdict returned for an issued token is harvested at the next command and counted."""
 
-    def returned(self, verdict="PASS", evidence=PASS_EVIDENCE, defects=None, run_id="wf_fixture-0002", agent="a0fixturerev01"):
+    def returned(self, verdict="PASS", evidence=PASS_EVIDENCE, defects=None, run_id="wf_fixture-0002", agent="a0fixturerev01", transcript=True):
         self.imported()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
         journal = Journal(self.search, run_id)
-        journal.agent(agent, lens(token, verdict, evidence, defects))
+        journal.agent(agent, lens(token, verdict, evidence, defects), transcript=transcript)
         return token, journal
 
-    def test_rework_waits_for_unimported_verdicts_then_works(self):
-        self.returned()
-        pending = self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic finding raised outside the review.")
-        self.assertIn("task value conformance: PASS from workflow-agent:wf_fixture-0002/a0fixturerev01", pending.message)
-        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["conformance"], task_id="value")["tasks"]["value"]["status"])
-        self.assertEqual("REWORK", e.rework(self.root, "value", "Synthetic finding raised after the import.")["tasks"]["value"]["status"])
+    def harvested(self, token):
+        return [item for item in e.load(self.root).get("harvested_reviews", []) if item["token"] == token]
 
-    def test_a_typed_fail_waits_for_unimported_verdicts(self):
-        self.begin()
-        self.implement()
+    def test_transitions_proceed_with_tokens_outstanding_and_harvest_their_verdicts(self):
+        token, _ = self.returned()
+        self.assertEqual("REWORK", e.rework(self.root, "value", "Synthetic finding raised outside the review.")["tasks"]["value"]["status"])
+        self.assertEqual([("PASS", "harvested")], [(item["verdict"], item["source"]) for item in self.harvested(token)])
+        self.assert_code("review_not_requested", e.import_review, self.root, lenses=["conformance"], task_id="value")
+
+    def test_g_a_late_verdict_after_a_fix_is_history_and_a_current_fail_blocks_ready_until_overridden(self):
+        self.integrated()
+        path = Path(e.load(self.root)["integration"]["path"])
+        first = e.review_token(self.root, lens="integrated")
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-mode", "Correct the file mode.")["integration_fix"]
+        (path / "value.txt").chmod(0o755)
+        git(path, "add", "--", "value.txt")
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"]})
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(first["token"], "FAIL", "A late verdict on the first content.", [{"file": "value.txt", "kind": "behavior"}]))
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        second = e.review_token(self.root, lens="integrated")
+        late = self.harvested(first["token"])
+        self.assertEqual([("FAIL", first["content"])], [(item["verdict"], item["snapshot"]["content"]) for item in late])
+        self.assertNotEqual(first["content"], second["content"])
+        Journal(self.search, "wf_fixture-0005").agent("a0fixturerev04", lens(first["token"], "FAIL", "Another late verdict for the superseded request."))
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(second["token"]))
+        self.assertEqual("PASS", e.import_review(self.root, lenses=["integrated"])["reviews"][-1]["verdict"])
+        self.assertEqual(2, len(self.harvested(first["token"])))
+        self.assertEqual("READY_TO_PUBLISH", e.ready(self.root)["state"])
+        Journal(self.search, "wf_fixture-0004").agent("a0fixturerev03", lens(second["token"], "FAIL", "A second reviewer of the current content found a defect."))
+        self.assert_code("late_review_fail", e.ready, self.root)
+        self.assertEqual(["FAIL"], [item["verdict"] for item in self.harvested(second["token"]) if item["actor"].endswith("a0fixturerev03")])
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the late FAIL is wrong for this content.", code="review_override")
+        self.assertEqual("READY_TO_PUBLISH", e.ready(self.root)["state"])
+
+    def test_h_a_late_fail_after_an_imported_pass_returns_a_verified_task_to_rework(self):
+        token, _ = self.returned()
+        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["conformance"], task_id="value")["tasks"]["value"]["status"])
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, "FAIL", "A second reviewer found the newline missing.", [{"file": "value.txt", "kind": "behavior"}]))
+        self.assert_code("dependency_not_ready", e.integrate, self.root)
+        owner = e.load(self.root)["tasks"]["value"]
+        self.assertEqual(("REWORK", 1, ["value.txt|behavior"]), (owner["status"], owner["rework_rounds"], owner["rework_history"][-1]["finding_keys"]))
+        self.assertEqual(["rework"], [item["effect"] for item in self.harvested(token) if item["verdict"] == "FAIL"])
+
+    def test_h_a_late_fail_on_an_integrated_task_refuses_ready_until_a_fix(self):
+        token, _ = self.returned()
+        e.import_review(self.root, lenses=["conformance"], task_id="value")
+        e.integrate(self.root)
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        e.review(self.root, "fixture-integration-reviewer", "PASS", PASS_EVIDENCE)
+        self.assertEqual("READY_TO_PUBLISH", e.ready(self.root)["state"])
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, "FAIL", "A second reviewer found the newline missing."))
+        self.assert_code("late_review_fail", e.ready, self.root)
+        fix = e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-late", "Address the late task finding.")["integration_fix"]
+        path = Path(e.load(self.root)["integration"]["path"])
+        (path / "value.txt").chmod(0o755)
+        git(path, "add", "--", "value.txt")
+        e.report_fix(self.root, "fixture-fix-writer", {**worker_result(fix["dispatch_id"]), "source_event": "synthetic fix result for " + fix["handle"]})
+        self.assertTrue(e.execute_gate(self.root, case_id="value-check")["passed"])
+        e.review(self.root, "fixture-integration-reviewer-2", "PASS", PASS_EVIDENCE)
+        self.assertEqual("READY_TO_PUBLISH", e.ready(self.root)["state"])
+
+    def test_a_late_fail_blocked_by_a_running_dependent_stays_pending_and_applies_later(self):
+        self.begin(dependent_plan())
+        dispatch_id = self.workflow_dispatch()
+        Journal(self.search).agent(IMPLEMENTER, worker_result(dispatch_id))
+        e.import_task_report(self.root, "value")
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         token = e.review_token(self.root, task_id="value", lens="conformance")["token"]
-        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The value misses its newline."))
-        self.assert_code("review_results_pending", e.review, self.root, "fixture-reviewer", "FAIL", "Synthetic typed finding.", task_id="value")
+        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
+        e.import_review(self.root, lenses=["conformance"], task_id="value")
+        e.prepare_task(self.root, "second")
+        e.register_agent(self.root, "second", "fixture-writer-second", "unit-test", "synthetic:second")
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, "FAIL", "A late FAIL while the dependent task runs."))
+        self.write_value("second", "final\n", "second.txt")
+        self.report("second")
+        self.assertEqual((["pending"], "VERIFIED"), ([item["effect"] for item in self.harvested(token) if item["verdict"] == "FAIL"], e.load(self.root)["tasks"]["value"]["status"]))
+        run = e.authorize(self.root, "implement", "fixture-user", "Synthetic renewed authority; every command harvests first.")
+        self.assertEqual(("REWORK", "INVALIDATED"), (run["tasks"]["value"]["status"], run["tasks"]["second"]["status"]))
+        self.assertEqual(["rework"], [item["effect"] for item in self.harvested(token) if item["verdict"] == "FAIL"])
 
-    def test_fix_register_waits_for_unimported_verdicts_then_works(self):
-        self.integrated()
-        token = e.review_token(self.root, lens="integrated")["token"]
-        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "The integrated value misses its marker.", [{"file": "value.txt", "kind": "behavior"}]))
-        self.assert_code("review_results_pending", e.register_fix, self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the marker.")
-        self.assertEqual("FAIL", e.import_review(self.root, lenses=["integrated"])["reviews"][-1]["verdict"])
-        self.assertEqual("DISPATCHED", e.register_fix(self.root, "fixture-fix-writer", "unit-test", "synthetic:fix-1", "Add the marker.")["integration_fix"]["status"])
+    def test_an_unverifiable_fail_counts_and_an_unverifiable_pass_is_ignored(self):
+        token, _ = self.returned(transcript=False)
+        refused = self.assert_code("review_lenses_incomplete", e.import_review, self.root, lenses=["conformance"], task_id="value")
+        self.assertIn("incomplete provenance", refused.message)
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, "FAIL", "An unverifiable FAIL still counts."), transcript=False)
+        run = e.import_review(self.root, lenses=["conformance"], task_id="value")
+        self.assertEqual(("FAIL", [True], "REWORK"), (run["reviews"][-1]["verdict"], [item["unverified"] for item in run["reviews"][-1]["verdicts"]], run["tasks"]["value"]["status"]))
 
-    def test_revise_archives_pending_verdicts_and_a_fail_stays_a_fail(self):
+    def test_a_late_pass_changes_nothing(self):
+        token, _ = self.returned("FAIL", "The value misses its newline.")
+        before = e.import_review(self.root, lenses=["conformance"], task_id="value")
+        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token))
+        after = e.authorize(self.root, "implement", "fixture-user", "Synthetic renewed authority; every command harvests first.")
+        self.assertEqual([("FAIL", "workflow-agent:wf_fixture-0002/a0fixturerev01"), ("PASS", "workflow-agent:wf_fixture-0003/a0fixturerev02")],
+                         [(item["verdict"], item["actor"]) for item in self.harvested(token)])
+        self.assertEqual((before["reviews"], "REWORK", 1), (after["reviews"], after["tasks"]["value"]["status"], after["tasks"]["value"]["rework_rounds"]))
+
+    def test_revise_harvests_first_and_a_fail_stays_a_fail(self):
         token, _ = self.returned("FAIL", "The value misses its newline.")
         Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(token, evidence="PASS: fine."))
-        self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic finding.")
         revised = e.revise(self.root, "Synthetic revision while a verdict waits.")
-        version = revised["previous_versions"][-1]
-        archived = version["archived_review_verdicts"]
-        self.assertEqual([("value", "conformance", "FAIL")], [(item["task"], item["lens"], item["verdict"]) for item in archived["reviews"]])
-        self.assertIn(archived["reviews"][0], version["reviews"])
-        self.assertEqual(["workflow-agent:wf_fixture-0003/a0fixturerev02"], [item["actor"] for item in archived["refused"]])
-        self.assertEqual(("archived", {}), (revised["review_request_history"][-1]["status"], revised["review_requests"]))
+        self.assertEqual([("FAIL", "value")], [(item["verdict"], item["task"]) for item in revised["harvested_reviews"] if item["token"] == token])
+        self.assertEqual(["workflow-agent:wf_fixture-0003/a0fixturerev02"], [item["actor"] for item in revised["refused_review_events"].values()])
         self.begin()
         self.implement()
         self.assertTrue(e.execute_gate(self.root, task_id="value")["passed"])
         self.assert_code("review_reroll", e.review, self.root, "fixture-reviewer", "PASS", PASS_EVIDENCE, task_id="value")
-
-    def test_a_deleted_transcript_makes_the_pending_check_refuse(self):
-        _, journal = self.returned()
-        (journal.dir / "agent-a0fixturerev01.jsonl").unlink()
-        self.assert_code("journal_transcript_missing", e.rework, self.root, "value", "Synthetic finding.")
-        (Path(e.load(self.root)["tasks"]["value"]["path"]) / "scratch.txt").write_text("changes the content\n")
-        self.assert_code("journal_transcript_missing", e.review_token, self.root, task_id="value", lens="adversary")
-        (Path(e.load(self.root)["tasks"]["value"]["path"]) / "scratch.txt").unlink()
-        revised = e.revise(self.root, "Synthetic revision: the transcript is gone for good.")
-        self.assertEqual(["journal_transcript_missing"], [item["code"] for item in revised["previous_versions"][-1]["archived_review_verdicts"]["unverified"]])
-
-    def test_dependency_rework_and_integration_wait_for_pending_verdicts(self):
-        self.begin(dependent_plan())
-        self.implement()
-        self.verify()
-        self.implement("second", {"second.txt": "final\n"})
-        self.assertTrue(e.execute_gate(self.root, task_id="second")["passed"])
-        token = e.review_token(self.root, task_id="second", lens="conformance")["token"]
-        Journal(self.search, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
-        self.assert_code("review_results_pending", e.rework, self.root, "value", "Synthetic dependency finding.")
-        self.assertEqual("VERIFIED", e.import_review(self.root, lenses=["conformance"], task_id="second")["tasks"]["second"]["status"])
-        again = e.review_token(self.root, task_id="second", lens="conformance")["token"]
-        Journal(self.search, "wf_fixture-0003").agent("a0fixturerev02", lens(again))
-        self.assert_code("review_results_pending", e.integrate, self.root)
-        e.import_review(self.root, lenses=["conformance"], task_id="second")
-        self.assertEqual("VERIFYING", e.integrate(self.root)["state"])
 
     def test_review_tokens_are_issued_only_where_their_verdicts_can_be_imported(self):
         self.begin()
@@ -989,20 +1040,19 @@ class PendingVerdictTests(ControlFixture):
         self.assert_code("review_state", e.review_token, self.root, lens="integrated")
 
 
-class PendingPublicationTests(PublisherFixture):
-    def test_refresh_and_merge_wait_for_pending_integration_verdicts(self):
+class PublicationHarvestTests(PublisherFixture):
+    def test_merge_refuses_a_late_fail_and_refresh_proceeds(self):
         self.published()
         self.grant_merge()
         token = e.review_token(self.root, lens="integrated")["token"]
-        Journal(self.host_root, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
-        self.assert_code("review_results_pending", publisher.merge, self.root, provider=self.provider)
+        Journal(self.host_root, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "A late FAIL on the published content."))
+        self.assert_code("late_review_fail", publisher.publish, self.root, "Update the fixture value", "The value now reads after.", provider=self.provider)
+        self.assert_code("late_review_fail", publisher.merge, self.root, provider=self.provider)
         self.remote_commit({"new-main.txt": "A new base for the refresh.\n"})
-        self.assert_code("review_results_pending", publisher.refresh, self.root, provider=self.provider)
-        e.import_review(self.root, lenses=["integrated"])
         self.assertEqual("VERIFYING", publisher.refresh(self.root, provider=self.provider)["state"])
 
 
-class PendingLocalFinishTests(LocalFixture):
+class LocalFinishHarvestTests(LocalFixture):
     def setUp(self):
         self.host_dir = tempfile.TemporaryDirectory(prefix="delivery-local-host-")
         self.addCleanup(self.host_dir.cleanup)
@@ -1012,14 +1062,14 @@ class PendingLocalFinishTests(LocalFixture):
         self.addCleanup(host.stop)
         super().setUp()
 
-    def test_finish_local_waits_for_pending_integration_verdicts(self):
+    def test_finish_local_refuses_a_late_fail_until_overridden(self):
         self.committed()
         token = e.review_token(self.root, lens="integrated")["token"]
-        Journal(self.host, "wf_fixture-0002").agent("a0fixturerev01", lens(token))
+        Journal(self.host, "wf_fixture-0002").agent("a0fixturerev01", lens(token, "FAIL", "A late FAIL on the committed content."))
         with self.assertRaises(e.RunError) as caught:
             publisher.finish_local(self.root)
-        self.assertEqual("review_results_pending", caught.exception.code)
-        e.import_review(self.root, lenses=["integrated"])
+        self.assertEqual("late_review_fail", caught.exception.code)
+        e.authorize(self.root, "decision", "fixture-user", "Synthetic user decision: the late FAIL is wrong.", code="review_override")
         self.assertEqual("COMPLETE", publisher.finish_local(self.root)["state"])
 
 

@@ -321,6 +321,7 @@ def publish(root, title, body, expected_revision=None, *, provider=None):
         engine.assert_gates_idle(run)
         engine.require(run["state"] in {"READY_TO_PUBLISH", "PR_OPEN"}, "publication_state", "Publish only a verified, committed integration branch.")
         _validated(run)
+        engine.assert_no_late_failures(run)
         engine.need_authority(run, "publish")
         info = _committed(run)
         service = provider or GitHub(info["worktree"])
@@ -452,8 +453,6 @@ def refresh(root, expected_revision=None, *, provider=None):
                 _merge_grant(run)
         fresh = git_ops.main_snapshot(run["primary"])["base_sha"]
         if fresh != run["integration"]["base_sha"] or recovering:
-            if not recovering:
-                engine.require_no_pending_verdicts(run, [None], "Refreshing the integration base")
             run["recovery"] = {"operation": "rebase", "target_base": fresh, "previous_head": info["head"],
                                "path": info["worktree"], "branch": info["branch"], "at": engine.now()}
             _invalidate(run)
@@ -537,7 +536,7 @@ def merge(root, expected_revision=None, *, provider=None):
                                "message": "The existing merge has no confirmed result; no additional merge command was submitted."}
         else:
             engine.require(pr.get("state") == "OPEN", "pr_closed", "The owned PR is not open.")
-            engine.require_no_pending_verdicts(run, [None], "Merging")
+            engine.assert_no_late_failures(run)
             base = _fresh_base(run)
             _pr_identity(run, pr, head=info["head"], base=base)
             warnings = _checks(pr)
@@ -816,7 +815,7 @@ def finish_local(root, expected_revision=None, *, fast_forward=False):
         else:
             # Nothing irreversible happened yet: validate from scratch.
             _validated(run)
-            engine.require_no_pending_verdicts(run, [None], "Finishing the local run")
+            engine.assert_no_late_failures(run)
             info = _committed(run)
             if fast_forward:
                 _local_main(run, run["base_sha"])
