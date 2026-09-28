@@ -87,6 +87,19 @@ real PR merge, deployment or production-side action is part of validation.
   `delivery-implement` and `delivery-review` workflows in Claude Code 2.1.283,
   journal imports from the real host journal, two-lens task review, integrated
   review, commit and `finish-local --fast-forward-main`; state COMPLETE.
-- Not verified: Codex and Cursor hosts with the new commands; live GitHub
+- Autonomous end-to-end runs on September 28, 2026, on a fresh repository without a
+  remote, one request each (add a helper with tests, export and README line,
+  local-only, fast-forward main):
+  - Claude Code headless with `--plugin-dir` and `/delivery-harness:delivery`: the
+    coordinator chose the workflow path on its own (`task-register --via-workflow`,
+    `task-import`, workflow reviews of the task and the integration with
+    `review-import`, `finish-local --fast-forward-main`); COMPLETE, every actor a
+    journal identity; the engine refused a commit message with an attribution
+    trailer the host had suggested.
+  - Codex (`codex exec`, workspace-write sandbox, run store under the workspace):
+    native subagents registered with the manual commands, two independent reviews,
+    `finish-local --fast-forward-main`; COMPLETE. Reviewer read-only mode was a
+    convention there, recorded as such by the coordinator.
+- Not verified: Cursor hosts with the new commands; live GitHub
   publication of a workflow-dispatched run; Linux process-identity paths of the
   gate runner changes.
