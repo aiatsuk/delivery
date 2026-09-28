@@ -4,7 +4,7 @@ One self-contained plugin for product context, precise specifications, isolated
 implementation, independent verification and a fresh-main worktree-to-PR flow.
 It reconciles five workflows instead of invoking five competing coordinators.
 
-Version 1.2.0 is maintained in [the Delivery repository](https://github.com/aiatsuk/delivery)
+Version 1.3.0 is maintained in [the Delivery repository](https://github.com/aiatsuk/delivery)
 under `plugins/delivery-harness`. The repository pins public upstream tools as Git
 submodules and provides `tools/upstreams.py` for explicit, content-bound update
 review. Those development inputs/tools are intentionally not runtime dependencies.
@@ -44,19 +44,22 @@ left untouched; do not invoke them as additional top-level coordinators inside a
 Delivery Harness run. Their useful mechanisms are shipped as internal modules and
 one precedence contract. Configured models are inherited, never secretly pinned.
 
-The Orchestrate integration now reflects upstream 0.5.0; see the selective-update
+The Orchestrate integration now reflects upstream 0.7.0; see the selective-update
 mapping in [provenance](PROVENANCE.md). Upstream plugins can be updated independently,
 but this vendored bundle adopts changes only through explicit review, testing and
 reinstallation. It does not automatically load newer upstream code.
 
 ## Workflow hosts and local-only runs
 
-On Claude Code the plug-in ships two workflow scripts, `delivery-implement` and
-`delivery-review` (under `skills/delivery/workflows/`, declared in the Claude
-manifest). Registering a task with `task-register --via-workflow` and importing
-its result with `task-import` takes the agent identity and report from the
-host-written journal instead of typed text; `review-token` and `review-import` do
-the same for per-lens reviews. Other hosts keep the manual register/report/review
+On Claude Code the plug-in ships one workflow script, `orchestrate-execute`
+(under `skills/delivery/workflows/`, declared in the Claude manifest): the
+execution loop of the pinned orchestrate release, byte for byte. Delivery runs it
+as its authority. `scripts/workflow_steps.py args` builds its arguments, and every
+loop step (prepare, dispatch, collect, gate, rework, review tokens, verdict import,
+finish) is an ordinary engine command through `workflow_steps.py`, so the engine
+keeps every record, budget and decision while the loop cannot skip a step. Agent
+identity, reports and per-lens verdicts come from the host-written journal, never
+from typed text. Other hosts keep the manual register/report/review
 path. A run for a repository without a usable origin, or for local-only work,
 is created with `new --local-only` and ends with `finish-local`.
 
@@ -101,8 +104,9 @@ A shared global-skill installation can instead link `~/.claude/skills/delivery`
 to this bundle's `skills/delivery` directory. That form is invoked as `/delivery`,
 without a plugin namespace, and uses the same source rather than a second copy.
 Copy `skills/delivery/workflows/*.js` into `~/.claude/workflows/` as well, so the
-skill can launch `delivery-implement` and `delivery-review` by name from any
-working directory; refresh the copies after every update.
+skill can launch `orchestrate-execute` by name from any working directory; refresh
+the copy after every update. It is the same file the orchestrate installer saves;
+the loop refuses arguments of another version, so keep both at the pinned release.
 
 ## Inspect and test
 

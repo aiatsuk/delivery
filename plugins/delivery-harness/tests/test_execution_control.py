@@ -657,11 +657,13 @@ class AbandonTests(ControlFixture):
         dispatch_id = self.workflow_dispatch()
         Journal(self.search).failed("a0fixturefail01", "implement:value")
         Journal(self.search).failed("a0fixtureother1", "implement:other")
+        Journal(self.search).failed("a0fixtureloop01", "rework:value:L0r1")
+        Journal(self.search).failed("a0fixtureother2", "impl:value2:L0")
         run = e.abandon_task(self.root, "value", "The workflow agent failed and returned no result.")
         owner = run["tasks"]["value"]
         entry = owner["rework_history"][-1]
         self.assertEqual(("REWORK", 1, "abandoned", "abandon", dispatch_id), (owner["status"], owner["support_rounds"], owner["agent"]["liveness"], entry["decision"], entry["abandoned_dispatch"]))
-        self.assertEqual((["a0fixturefail01"], False, str(self.search)), ([item["agent_id"] for item in entry["journal"]["failed"]], entry["journal"]["result_present"], entry["journal"]["host_root"]))
+        self.assertEqual((["a0fixturefail01", "a0fixtureloop01"], False, str(self.search)), ([item["agent_id"] for item in entry["journal"]["failed"]], entry["journal"]["result_present"], entry["journal"]["host_root"]))
         self.assertIn(f"workflow-agent:{RUN_ID}/a0fixturefail01", {item["actor"] for item in run["writer_history"]})
         path = Path(owner["path"])
         self.assertEqual("after\n", (path / "value.txt").read_text())

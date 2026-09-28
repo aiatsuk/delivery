@@ -2013,7 +2013,7 @@ def abandon_task(root, task_id: str, reason: str, expected_revision=None) -> dic
     if agent.get("via_workflow"):
         pinned = run.get("workflow_host_root") or str(workflow_journal.host_root())
         since = parse_instant(agent["registered_at"], "Dispatch registration time").timestamp() - 1
-        observed = workflow_journal.observe_dispatch(f"implement:{task_id}", agent["dispatch_id"], since=since, host=pinned)
+        observed = workflow_journal.observe_dispatch(workflow_journal.implementer_labels(task_id), agent["dispatch_id"], since=since, host=pinned)
         observed["effective_host_root"] = str(workflow_journal.host_root())
     with transaction(root, "task_dispatch_abandoned", expected_revision) as run:
         _collection_state(run)

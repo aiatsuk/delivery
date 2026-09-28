@@ -1,5 +1,21 @@
 # Changes
 
+## 1.3.0
+
+One execution loop for Delivery and orchestrate.
+
+- Replace the `delivery-implement` and `delivery-review` workflows with the pinned
+  orchestrate execution loop (`orchestrate-execute`, 0.7.0), shipped verbatim and
+  run under this engine's authority: implement, gate, review and rework are code,
+  and every step is recorded by the ordinary engine commands.
+- Add `scripts/workflow_steps.py`: the loop's arguments (`args`, with
+  `--integration` for the integrated review) and its eight authority steps. Engine
+  refusals that another round cannot repair end the task BLOCKED with the reason.
+- `task-abandon` recognizes the loop's implementer labels (`impl:T:L<n>`,
+  `rework:T:L<n>r<n>`).
+- Pin orchestrate 0.7.0 (3e5886a) with a new review record; renew the factory record
+  for the changed shared files.
+
 ## 1.2.0
 
 Execution control from an audit of nine real runs: the engine now enforces what

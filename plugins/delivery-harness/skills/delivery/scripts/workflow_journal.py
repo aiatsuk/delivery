@@ -212,9 +212,17 @@ def find_results(match: Callable[[dict], Any], *, journal=None, search_root=None
     return found
 
 
-def observe_dispatch(label: str, dispatch_id: str, *, since: float | None = None, host=None) -> dict:
+def implementer_labels(task_id: str) -> re.Pattern:
+    """Labels of implementation agents for one task: the shared loop's first attempt and rework
+    rounds (``impl:T:L0``, ``rework:T:L0r1``) and the earlier single-dispatch label ``implement:T``."""
+    task = re.escape(task_id)
+    return re.compile(rf"(?:implement:{task}|impl:{task}:L\d+|rework:{task}:L\d+r\d+)")
+
+
+def observe_dispatch(label, dispatch_id: str, *, since: float | None = None, host=None) -> dict:
     """Record what the host journals show for an unreturned workflow dispatch, without judging it.
 
+    ``label`` is an exact label or a compiled pattern that must match the whole label.
     ``failed`` lists failed agents whose started line carries ``label``; ``results`` lists result
     lines naming ``dispatch_id``. Journals last written before ``since`` (epoch seconds) are skipped.
     ``host`` is the run's recorded host root (default: the effective one).
@@ -239,11 +247,13 @@ def observe_dispatch(label: str, dispatch_id: str, *, since: float | None = None
                 if entry.get("type") == "started":
                     labels.setdefault((key, agent), entry.get("label"))
                 record = {"journal": str(path), "run_id": path.parent.name, "agent_id": agent, "key": key, "line_sha256": hashlib.sha256(line).hexdigest()}
-                if entry.get("type") == "failed" and (entry.get("label") or labels.get((key, agent))) == label:
-                    failed.append({**record, "label": label})
+                seen = entry.get("label") or labels.get((key, agent))
+                matched = isinstance(seen, str) and (label.fullmatch(seen) if isinstance(label, re.Pattern) else seen == label)
+                if entry.get("type") == "failed" and matched:
+                    failed.append({**record, "label": seen})
                 result = entry.get("result")
                 if entry.get("type") == "result" and isinstance(result, dict) and isinstance(result.get("dispatch_id"), str) and result["dispatch_id"] == dispatch_id:
                     results.append(record)
             except LINE_ERRORS:
                 continue
-    return {"host_root": str(host), "label": label, "failed": failed, "results": results, "result_present": bool(results), "unreadable": problems}
+    return {"host_root": str(host), "label": label.pattern if isinstance(label, re.Pattern) else label, "failed": failed, "results": results, "result_present": bool(results), "unreadable": problems}

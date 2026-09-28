@@ -50,71 +50,79 @@ models unless explicitly selected by the user. If the host cannot resume a prior
 handle, record its observed absence, preserve the worktree, and register a fresh
 dispatch for an authorized retry. Never reuse a prior report as its new result.
 
-### Workflow dispatch and review (preferred on Claude Code)
+### The shared execution loop (preferred on Claude Code)
 
-The plug-in ships two workflow scripts under `workflows/`. Launch them with the
-`Workflow` tool by name, passing `args` as a JSON object: `delivery-harness:delivery-implement`
-and `delivery-harness:delivery-review` when the plug-in is installed (the Claude manifest
-declares them), or `delivery-implement` and `delivery-review` when the scripts were copied
-into `~/.claude/workflows/` for the global-skill installation. A launch by `scriptPath` works
-only when the skill directory is readable from the session; a session started elsewhere is
-refused. Saved workflows load when a session starts.
+The plug-in ships `workflows/orchestrate-execute.js`, the pinned orchestrate
+execution loop, unchanged. Launch it with the `Workflow` tool by name, passing
+`args` as a JSON object: `delivery-harness:orchestrate-execute` when the plug-in is
+installed (the Claude manifest declares it), or `orchestrate-execute` when the
+script was copied into `~/.claude/workflows/` for the global-skill installation. A
+launch by `scriptPath` works only when the skill directory is readable from the
+session. Saved workflows load when a session starts. The loop refuses arguments of
+another version; refresh the saved copy after an update.
 
-1. `task-prepare --task T` as usual, then `task-register --task T --via-workflow`
-   records a pending dispatch without any typed identity; read its `dispatch_id` from
-   `status`.
-2. `delivery-implement.js`, args `{run_root, tasks: [{task, dispatch_id, worktree,
-   branch, brief, paths, acceptance, gates, instructions?, model?, effort?}]}`:
-   one agent per task; each returns `{dispatch_id, summary, tests, limitations, tree}`,
-   where `tree` is the worktree's `git write-tree` after its final staging.
-3. `task-import --task T` finds the result carrying that dispatch ID in the host
-   journal (`~/.claude/projects/<project>/<session>/subagents/workflows/<runId>/journal.jsonl`,
+1. `scripts/workflow_steps.py --run ROOT args` prints the arguments: every
+   unverified task (or `--task T …`), the lenses (`--lens`, default conformance),
+   an optional `--model`/`--effort` only when the user selected one, and the
+   engine's report and verdict schemas. `--integration` instead targets the
+   integration worktree after `integrate` and the integrated gates.
+2. The loop runs each task in dependency order. It calls `workflow_steps.py`, which
+   runs ordinary engine commands, through relay agents: `prepare` (`task-prepare`),
+   `dispatch` (`task-register --via-workflow`), the implementer (labels `impl:T:L0`,
+   `rework:T:L0r<n>`; its report carries the dispatch ID and the staged tree),
+   `collect` (`task-import`; a result the engine refuses is abandoned with
+   `task-abandon`, which counts as a support round), `gate` (each planned gate with
+   `gate --index`; a gate without its side-effect authority blocks), `rework`
+   (`task-rework --decision code-fix` with `file|kind` finding keys),
+   `review-open` (`review-token` per lens), one reviewer per lens returning its
+   token, `review-close` (`review-import` of every lens; the engine's verdict wins),
+   and `finish` (the engine's exported patch). Any engine block, spent budget,
+   non-converging finding or invalidated attempt ends the task BLOCKED with the
+   engine's reason; the coordinator decides as for a manual run.
+3. Journal rules: `task-import` finds the one result carrying the dispatch ID in
+   the host journal (`~/.claude/projects/<project>/<session>/subagents/workflows/<runId>/journal.jsonl`,
    or `--journal PATH`), requires its earlier `started` line and the agent's
    transcript, and records actor `workflow-agent:<runId>/<agentId>`, the handle and
    a source event bound to the journal line's hash. The report's `tree` must equal
-   the worktree's staged tree. If the workflow ended without an importable result
-   for a dispatch (a `failed` line, a skipped agent, a report the engine refuses),
-   `task-abandon --task T --reason …` records what the journal shows and returns the
-   task to rework; it counts as a support round. If the agent committed or switched
-   branches, abandon invalidates the attempt instead and `task-prepare` creates a new
-   worktree; budgets carry over. The same happens when the task worktree no longer
-   exists. Abandon looks for the label `implement:<task>` the
-   shipped script uses, and cannot tell whether an agent is still running: wait for
-   the workflow to finish first.
-4. After the task gates: `review-token --task T --lens L` per lens (each call is a
-   recorded review request for the current content), then
-   `delivery-review.js`, args `{run_root, targets: [{task (null for the
-   integration), worktree, base_sha, acceptance, requirements?, gates, brief?,
-   lenses: [{lens, token, model?, effort?}]}]}`; then
-   `review-import [--task T] --lens L …` imports exactly one verdict per current
-   token, for every requested lens at once, from distinct agents that never wrote the
-   change. Several verdicts for one token from distinct independent agents combine to
-   the worst. A returned verdict always counts: a FAIL counts even when malformed
-   (unusable defects become the key `(review)|other`); an invalid PASS, or a verdict
-   from an agent that wrote the change, is skipped and recorded as refused, and the
-   lens then needs a correct verdict (rerun the review workflow with the same tokens).
-   Any failing lens fails the review, and its defects become finding keys. Every
-   issued token stays tracked: each mutating command first harvests verdicts that
-   arrived late, whatever happened to their request, and records them against the
-   content their token was issued for. A late FAIL on current content returns an
-   unintegrated task to rework, or keeps the run from `ready`, `publish`, `merge`
-   and `finish-local` (`late_review_fail`) until the content changes or the user
-   records an override; a late FAIL on older content guards that content. A result
-   with incomplete provenance fails closed: a FAIL counts, a PASS is ignored. Lines
-   that do not decode are skipped; if a journal cannot be read, ordinary commands
-   continue and record `harvest_incomplete`, while `ready`, `publish`, `merge`,
-   `finish-local`, `review-import` and `task-import` refuse until the harvest
-   completes. Any unreadable path under the host root, in any project, has this
-   effect for every run that issued tokens; the paths are listed under
-   `harvest.unreadable` in status, and restoring read access is the way out.
-   Symlinked project, session or run directories are skipped and listed, so a
-   project whose journals live only behind a symlink cannot use workflow import. Tokens are
-   issued only where their verdicts can still be imported. A new request for changed content keeps every
-   earlier lens. While a request is open, and for any task dispatched through a
-   workflow, typed `review` is refused. Every FAIL, whatever its decision, guards its
-   exact content and base: a later PASS on it is refused (`review_reroll`) unless the
-   user recorded `authorize --scope decision --code review_override` for that target
-   and content after that FAIL.
+   the worktree's staged tree. Abandon looks for failed agents under the loop's
+   implementer labels (and the earlier `implement:<task>`) and cannot tell whether
+   an agent is still running: wait for the workflow to finish before acting on a
+   task by hand.
+4. `review-import` imports exactly one verdict per current token, for every
+   requested lens at once, from distinct agents that never wrote the change. Several
+   verdicts for one token from distinct independent agents combine to the worst. A
+   returned verdict always counts: a FAIL counts even when malformed (unusable
+   defects become the key `(review)|other`); an invalid PASS, or a verdict from an
+   agent that wrote the change, is skipped and recorded as refused, and the lens
+   then needs a correct verdict. Any failing lens fails the review, and its defects
+   become finding keys. Every issued token stays tracked: each mutating command
+   first harvests verdicts that arrived late, whatever happened to their request,
+   and records them against the content their token was issued for. A late FAIL on
+   current content returns an unintegrated task to rework, or keeps the run from
+   `ready`, `publish`, `merge` and `finish-local` (`late_review_fail`) until the
+   content changes or the user records an override; a late FAIL on older content
+   guards that content. A result with incomplete provenance fails closed: a FAIL
+   counts, a PASS is ignored. Lines that do not decode are skipped; if a journal
+   cannot be read, ordinary commands continue and record `harvest_incomplete`,
+   while `ready`, `publish`, `merge`, `finish-local`, `review-import` and
+   `task-import` refuse until the harvest completes. Any unreadable path under the
+   host root, in any project, has this effect for every run that issued tokens; the
+   paths are listed under `harvest.unreadable` in status, and restoring read access
+   is the way out. Symlinked project, session or run directories are skipped and
+   listed, so a project whose journals live only behind a symlink cannot use
+   workflow import. Tokens are issued only where their verdicts can still be
+   imported. A new request for changed content keeps every earlier lens. While a
+   request is open, and for any task dispatched through a workflow, typed `review`
+   is refused. Every FAIL, whatever its decision, guards its exact content and
+   base: a later PASS on it is refused (`review_reroll`) unless the user recorded
+   `authorize --scope decision --code review_override` for that target and content
+   after that FAIL.
+
+The engine commands stay available for recovery: after a loop ends, `status` shows
+where each task stands, and the coordinator continues with the same commands (or a
+new loop for the remaining tasks) instead of repeating recorded steps. The Codex
+runner of orchestrate refuses these arguments (it writes no host journal); on
+Codex use the native-agent path below.
 
 Omit `model` unless the user selected one; the host's configured model is inherited.
 Journals are accepted only under the host projects root the run pinned at `new`
