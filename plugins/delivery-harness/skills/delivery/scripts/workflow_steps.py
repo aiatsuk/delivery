@@ -260,7 +260,9 @@ def step_gate(a) -> dict:
     worktree = owner["path"]
     results, tail, failed = [], [], False
     for index, gate in enumerate(task["gates"]):
-        ok, receipt = delivery("gate", "--run", a.run, "--task", a.task, "--index", str(index))
+        # A planned timeout lets a long but legitimate gate (a full test suite) run past the 300 s default.
+        timeout = ["--timeout", str(gate["timeout"])] if "timeout" in gate else []
+        ok, receipt = delivery("gate", "--run", a.run, "--task", a.task, "--index", str(index), *timeout)
         if not ok:
             # A planned command that ran and failed still returns a receipt; a refusal means the gate
             # could not run at all (authority, a held resource, the run's state), which no rework fixes.

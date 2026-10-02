@@ -256,6 +256,18 @@ def ancestors(tasks: dict, task_id: str) -> set[str]:
     return seen
 
 
+DEFAULT_GATE_TIMEOUT = 300
+
+
+def gate_timeout(entry: dict) -> int:
+    """A planned gate's or case's optional timeout: whole seconds 1–3600, else the 300 s default."""
+    if "timeout" not in entry:
+        return DEFAULT_GATE_TIMEOUT
+    value = entry["timeout"]
+    require(type(value) is int and 1 <= value <= 3600, "invalid_timeout", "A planned gate timeout is a whole number of seconds from 1 to 3600.")
+    return value
+
+
 def validate_plan(plan: dict) -> dict:
     require(isinstance(plan, dict), "invalid_plan", "Plan must be an object.")
     text(plan.get("goal"), "Goal")
@@ -292,6 +304,7 @@ def validate_plan(plan: dict) -> dict:
             require(gate.get("risk") in {"safe", "external", "destructive"}, "invalid_risk", "Classify each task gate's side effects explicitly.")
             oracle(gate.get("oracle"), "Task gate oracle")
             text(gate.get("cleanup"), "Task gate cleanup")
+            gate_timeout(gate)
         require(isinstance(item.get("resources", []), list) and all(isinstance(r, str) and r.strip() for r in item.get("resources", [])), "invalid_resource", "Exclusive resources are named strings.")
         tasks[tid] = {**item, "depends_on": item.get("depends_on", []), "resources": sorted({r.strip() for r in item.get("resources", [])})}
     require(tasks, "invalid_plan", "No implementation tasks are defined.")
@@ -312,6 +325,7 @@ def validate_plan(plan: dict) -> dict:
         require(case.get("risk") in {"safe", "external", "destructive"}, "invalid_risk", "Classify test side effects explicitly.")
         oracle(case.get("oracle"), "Observable verification oracle")
         text(case.get("cleanup"), "Verification cleanup")
+        gate_timeout(case)
         require(isinstance(case.get("resources", []), list) and all(isinstance(r, str) and r.strip() for r in case.get("resources", [])), "invalid_resource", "Integrated resources are named strings.")
         require(set(case.get("requirements", [])) and set(case["requirements"]) <= ids, "coverage_gap", "Cases must trace to requirements.")
         coverage.update(case["requirements"])
@@ -1016,8 +1030,9 @@ def _signal_gate_group(process, number) -> None:
 
 
 @gate_jobs.guarded
-def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None, gate_index: int = 0, timeout: int = 300, expected_revision=None) -> dict:
-    require(1 <= timeout <= 3600, "invalid_timeout", "Gate timeout must be between 1 and 3600 seconds.")
+def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None, gate_index: int = 0, timeout: int | None = None, expected_revision=None) -> dict:
+    """Run one planned gate; ``timeout`` overrides the gate's planned timeout (default 300 s)."""
+    require(timeout is None or (type(timeout) is int and 1 <= timeout <= 3600), "invalid_timeout", "Gate timeout must be between 1 and 3600 seconds.")
     run = load(root)
     require(expected_revision is None or run["revision"] == expected_revision, "stale_revision", "Reload the run before executing a gate.")
     assert_plan(run)
@@ -1027,16 +1042,20 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
         require(0 <= gate_index < len(task["gates"]), "unknown_gate", "Unknown planned task gate.")
         gate = task["gates"][gate_index]
         argv, key, risk = gate["command"], f"{task_id}:{gate_index}", gate["risk"]
+        planned = gate
         owner = run["tasks"].get(task_id)
         require(owner and owner["status"] in {"REPORTED", "VERIFIED"}, "task_state", "Collect the real task report first.")
     else:
         case = next((c for c in run["plan"]["verification"] if c["id"] == case_id), None)
         require(case, "unknown_case", "Select a planned integrated verification case.")
         argv, key, risk = case["command"], case["id"], case["risk"]
+        planned = case
         owner = run.get("integration")
         fix = run.get("integration_fix")
         require(not fix or fix.get("status") == "REPORTED", "integration_report_required", "Wait for the current integration-fix dispatch's real report before verification.")
     require(owner, "missing_worktree", "No owned worktree for the gate.")
+    if timeout is None:
+        timeout = gate_timeout(planned)
     if risk != "safe":
         need_authority(run, "test-" + risk, target=key)
     repeat = 1
@@ -1101,7 +1120,7 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
                 break
     after = snapshot(load(root), task_id)
     receipt = {"key": key, "task": task_id, "command": argv, "exit_code": code, "timed_out": timed_out,
-               "planned_repeat": repeat, "attempts": attempts, "outcome": outcome,
+               "planned_repeat": repeat, "attempts": attempts, "outcome": outcome, "timeout_seconds": timeout,
                "duration_seconds": round(time.monotonic() - start, 3), "at": now(), "snapshot": before,
                "unchanged": before["content"] == after["content"], "log": name, "log_hash": hashlib.sha256(Path(name).read_bytes()).hexdigest(),
                "after": {"content": after["content"], "base_sha": after["base_sha"], "path": owner["path"]}}
