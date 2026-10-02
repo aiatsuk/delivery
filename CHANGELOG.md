@@ -9,7 +9,8 @@ Upstream sync and two fixes.
   refusing the whole tree with `UNSUPPORTED_TREE`. `capture-verification` refuses
   with `submodule_changed`, naming each path and commit, when the integration adds,
   moves or removes a gitlink, since the actual-diff review cannot inspect it;
-  unchanged submodules pass. Other unusual file modes are still refused.
+  unchanged submodules pass, also when `.gitmodules` sets `ignore = all`. Other
+  unusual file modes are still refused.
 - Task gates and integrated cases may declare `timeout` (whole seconds, 1–3600) in
   the plan. `gate` uses it when `--timeout` is not given (default still 300 s), the
   loop's gate step passes it on, plan validation refuses other values with

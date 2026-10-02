@@ -114,7 +114,7 @@ def staged_gitlink_changes(worktree: str, base: str) -> list[dict]:
     root = Path(worktree).resolve()
     if not _OID.fullmatch(base):
         raise git_ops.GitError("INVALID_TREE", "Use an exact Git object ID for the base.")
-    output = git_ops._git(root, "diff-index", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev", base).stdout
+    output = git_ops._git(root, "diff-index", "--cached", "--ignore-submodules=none", "--raw", "-z", "--no-renames", "--no-abbrev", base).stdout
     fields = output.split(b"\0")
     changes = []
     for metadata, raw_name in zip(fields[0::2], fields[1::2]):
