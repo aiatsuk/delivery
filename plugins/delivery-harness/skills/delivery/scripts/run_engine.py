@@ -1772,6 +1772,14 @@ def ready(root, expected_revision=None) -> dict:
     return load(root)
 
 
+def assert_gitlinks_unchanged(changes: list) -> None:
+    """Snapshots carry gitlinks without content, so a moved submodule is refused, not reviewed blind."""
+    require(not changes, "submodule_changed",
+            "The integration changes submodule commits, which the actual-diff review cannot inspect: "
+            + ", ".join(f"{c['path']} {c['before'] or 'absent'} -> {c['after'] or 'absent'}" for c in changes)
+            + ". Restore the base gitlinks or verify the submodule change in a separately scoped run.")
+
+
 def capture_verification(root, reason: str, expected_revision=None) -> dict:
     """Bind rich actual-diff review to exact current base and staged Git trees."""
     import snapshots
@@ -1782,6 +1790,7 @@ def capture_verification(root, reason: str, expected_revision=None) -> dict:
         require(run["plan"]["classification"]["level"] != "small", "small_verification", "Small work uses direct content-bound verification without the rich engine.")
         text(reason, "Verification capture reason")
         owner = run["integration"]
+        assert_gitlinks_unchanged(snapshots.staged_gitlink_changes(owner["path"], owner["base_sha"]))
         inventory = git_ops.inventory(owner["path"], owner["base_sha"])
         require(not inventory["unstaged"] and not inventory["untracked"] and not inventory["in_progress"], "unstaged_snapshot", "Stage only the exact intended integration files before snapshotting; finish existing Git operations.")
         snapshot_home = Path(root) / "spec-snapshots"
@@ -1789,6 +1798,7 @@ def capture_verification(root, reason: str, expected_revision=None) -> dict:
         folder = Path(tempfile.mkdtemp(prefix=f"r{run['revision']}-", dir=snapshot_home))
         before = snapshots.capture_tree(owner["path"], owner["base_sha"], str(folder / "before"))
         after = snapshots.capture_tree(owner["path"], inventory["tree"], str(folder / "after"))
+        assert_gitlinks_unchanged(snapshots.gitlink_changes(before, after))
         snap = snapshot(run)
         require(snap["content"] == inventory["content_fingerprint"], "worktree_changed", "The integration tree changed while it was captured.")
         state = spec_command(root, ["status"])["state"]

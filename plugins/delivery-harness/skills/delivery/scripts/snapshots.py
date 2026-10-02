@@ -8,6 +8,8 @@ import subprocess
 
 import git_ops
 
+_OID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
 
 def capture_tree(worktree: str, tree: str, destination: str) -> dict:
     """Copy exact Git blobs, not a mutable filesystem or archive transform.
@@ -15,6 +17,8 @@ def capture_tree(worktree: str, tree: str, destination: str) -> dict:
     A failed export is preserved. Destinations are new and outside all repository
     worktrees. Symlinks are represented but never followed while copying. Neither
     export-ignore nor export-subst can hide or alter implementation evidence.
+    Gitlinks (submodules) are recorded as path and commit in ``gitlinks`` without
+    copying any content; compare them with ``gitlink_changes``.
     """
     root, target = Path(worktree).resolve(), Path(destination).resolve()
     if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", tree):
@@ -26,7 +30,7 @@ def capture_tree(worktree: str, tree: str, destination: str) -> dict:
             raise git_ops.GitError("EVIDENCE_IN_REPOSITORY", "Snapshots belong outside repository worktrees.")
     if target.exists() or Path(destination).is_symlink():
         raise git_ops.GitError("OUTPUT_EXISTS", "Snapshot directories are immutable; use a new path.")
-    entries = []
+    entries, gitlinks = [], []
     for record in git_ops._git(root, "ls-tree", "-r", "-z", actual).stdout.split(b"\0"):
         if not record:
             continue
@@ -35,8 +39,11 @@ def capture_tree(worktree: str, tree: str, destination: str) -> dict:
         name = PurePosixPath(os.fsdecode(raw_name))
         if name.is_absolute() or any(p in {"..", ".git"} for p in name.parts) or not name.parts:
             raise git_ops.GitError("UNSAFE_TREE", "Unsafe path in Git tree.")
+        if mode == "160000" and kind == "commit" and _OID.fullmatch(oid):
+            gitlinks.append({"path": name.as_posix(), "commit": oid})
+            continue
         if kind != "blob" or mode not in {"100644", "100755", "120000"}:
-            raise git_ops.GitError("UNSUPPORTED_TREE", "Submodules and unusual file modes need separately scoped verification.")
+            raise git_ops.GitError("UNSUPPORTED_TREE", "Unusual file modes need separately scoped verification.")
         entries.append((mode, oid, name))
     if len(entries) > 200_000:
         raise git_ops.GitError("SNAPSHOT_LIMIT", "Snapshot exceeds the bounded 200,000-file limit.")
@@ -86,4 +93,34 @@ def capture_tree(worktree: str, tree: str, destination: str) -> dict:
             process.stdin.close()
         process.stdout.close()
         process.stderr.close()
-    return {"path": str(target), "tree": actual, "files": len(entries), "bytes": total}
+    return {"path": str(target), "tree": actual, "files": len(entries), "bytes": total,
+            "gitlinks": sorted(gitlinks, key=lambda item: item["path"])}
+
+
+def gitlink_changes(before: dict, after: dict) -> list[dict]:
+    """Gitlinks (submodule commits) that differ between two captured snapshots.
+
+    Snapshots record gitlinks without their content, so the actual-diff review
+    cannot see a submodule change; callers must refuse or report every entry here.
+    """
+    old = {item["path"]: item["commit"] for item in before.get("gitlinks", [])}
+    new = {item["path"]: item["commit"] for item in after.get("gitlinks", [])}
+    return [{"path": path, "before": old.get(path), "after": new.get(path)}
+            for path in sorted(set(old) | set(new)) if old.get(path) != new.get(path)]
+
+
+def staged_gitlink_changes(worktree: str, base: str) -> list[dict]:
+    """Staged index entries that add, move or remove a gitlink relative to ``base``."""
+    root = Path(worktree).resolve()
+    if not _OID.fullmatch(base):
+        raise git_ops.GitError("INVALID_TREE", "Use an exact Git object ID for the base.")
+    output = git_ops._git(root, "diff-index", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev", base).stdout
+    fields = output.split(b"\0")
+    changes = []
+    for metadata, raw_name in zip(fields[0::2], fields[1::2]):
+        old_mode, new_mode, old_oid, new_oid, _status = metadata.decode("ascii").lstrip(":").split()
+        if "160000" in (old_mode, new_mode):
+            changes.append({"path": os.fsdecode(raw_name),
+                            "before": old_oid if old_mode == "160000" else None,
+                            "after": new_oid if new_mode == "160000" else None})
+    return sorted(changes, key=lambda item: item["path"])

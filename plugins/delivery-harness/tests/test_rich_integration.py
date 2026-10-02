@@ -292,6 +292,47 @@ class RichIntegrationTests(run_fixtures.RunFixture):
         self.authorize_check()
         return self.finish_verification()
 
+    def add_submodule(self):
+        """Commit and push a real, initialized submodule into the fixture's main branch."""
+        library = self.home / "library"
+        library.mkdir()
+        git(library, "init", "--initial-branch=main")
+        git(library, "config", "user.name", "Fixture Maintainer")
+        git(library, "config", "user.email", "fixture@example.invalid")
+        (library / "lib.txt").write_text("one\n")
+        git(library, "add", "lib.txt")
+        git(library, "commit", "-m", "First library commit")
+        first = git(library, "rev-parse", "HEAD")
+        (library / "lib.txt").write_text("two\n")
+        git(library, "commit", "-am", "Second library commit")
+        git(self.repo, "-c", "protocol.file.allow=always", "submodule", "add", str(library), "vendor/lib")
+        git(self.repo, "-C", "vendor/lib", "checkout", "--detach", first)
+        git(self.repo, "add", "vendor/lib")
+        git(self.repo, "commit", "-m", "Add a library submodule")
+        git(self.repo, "push", "origin", "main")
+        return first, git(library, "rev-parse", "HEAD")
+
+    def test_unchanged_submodule_does_not_block_capture_verification(self):
+        first, _ = self.add_submodule()
+        self.integrate_medium()
+        captured = self.capture_medium()
+        binding = captured["rich_snapshot"]
+        self.assertEqual([{"path": "vendor/lib", "commit": first}], binding["before"]["gitlinks"])
+        self.assertEqual(binding["before"]["gitlinks"], binding["after"]["gitlinks"])
+        self.assertEqual(["value.txt"], [item["path"] for item in self.rich("status")["actual_change_surface"]])
+
+    def test_changed_gitlink_refuses_capture_verification_with_a_clear_code(self):
+        _, second = self.add_submodule()
+        worktree = self.integrate_medium()
+        git(worktree, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
+        revision = e.load(self.root)["revision"]
+        refused = self.cli("capture-verification", "--reason", "Capture with a moved submodule", expected_code=2)
+        self.assertEqual("submodule_changed", refused["error"]["code"])
+        self.assertIn("vendor/lib", refused["error"]["message"])
+        current = e.load(self.root)
+        self.assertEqual(revision, current["revision"])
+        self.assertIsNone(current.get("rich_snapshot"))
+
     def test_medium_full_lifecycle_runs_authorized_rich_case_and_reaches_readiness(self):
         ready = self.medium_ready()
         self.assertEqual("READY_TO_PUBLISH", ready["state"])
