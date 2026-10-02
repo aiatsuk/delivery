@@ -1,5 +1,27 @@
 # Changes
 
+## 1.4.0
+
+Upstream sync and two fixes.
+
+- Medium/Large verification works in repositories with submodules. Snapshots
+  record each gitlink (path and commit) without copying its content instead of
+  refusing the whole tree with `UNSUPPORTED_TREE`. `capture-verification` refuses
+  with `submodule_changed`, naming each path and commit, when the integration adds,
+  moves or removes a gitlink, since the actual-diff review cannot inspect it;
+  unchanged submodules pass. Other unusual file modes are still refused.
+- Task gates and integrated cases may declare `timeout` (whole seconds, 1–3600) in
+  the plan. `gate` uses it when `--timeout` is not given (default still 300 s), the
+  loop's gate step passes it on, plan validation refuses other values with
+  `invalid_timeout`, and the gate receipt records `timeout_seconds`. A long but
+  legitimate gate such as a full test suite is no longer killed at 300 s.
+- Pin orchestrate 0.7.1 (6679439), AI Factory 1.0.2 (ba64c62) and
+  spec-driven-development 1.0.1 (e9c04b6); product-driven-development stays at
+  ebe92fb. The shipped loop is the upstream 0.7.1 file (`SCRIPT_VERSION` 0.7.1).
+  Factory 1.0.2 is wording in a skill this bundle does not vendor, and the
+  spec-driven-development 1.0.1 fallback YAML parser is already identical here.
+  New review records for all four sources.
+
 ## 1.3.1
 
 Fixes for the shared execution loop found in real runs.

@@ -153,3 +153,23 @@ real PR merge, deployment or production-side action is part of validation.
   all four reviewed and `make check` passes.
 - Not yet covered: a full plug-in suite run with the two later fixes, and a live
   Claude Code host run of 1.3.1.
+
+## 1.4.0 upstream sync and two fixes (October 2, 2026)
+
+- Pins moved to orchestrate 0.7.1 (6679439), AI Factory 1.0.2 (ba64c62) and
+  spec-driven-development 1.0.1 (e9c04b6); product-driven-development stays at
+  ebe92fb. The shipped loop is `cmp`-identical to upstream
+  `skill/workflows/orchestrate-execute.js` at 6679439. The spec-driven-development
+  1.0.1 parser functions are byte-identical to the bundled ones.
+- Submodules: regression tests in `tests/test_snapshots.py` and
+  `tests/test_rich_integration.py` were seen failing first (an unchanged submodule
+  refused with `UNSUPPORTED_TREE`; a moved gitlink refused only with
+  `DIRECTORY_SCOPE`), then pass: unchanged submodules capture, a moved gitlink is
+  refused with `submodule_changed` before any state change.
+- Gate timeouts: `GateTimeoutTests` in `tests/test_run_engine.py` and the gate-step
+  test in `tests/test_workflows.py` were seen failing first, then pass.
+- Tools tests 20/20 and the plug-in catalog 529/529 in eight shards (0 skipped,
+  0 failures); `make check` passes with all four sources reviewed. Package export
+  smoke, bundle validation and `delivery.py doctor` in the exported package pass.
+- Not yet covered: an independent review of the 1.4.0 changes and a live host run
+  of 1.4.0.
