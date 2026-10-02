@@ -177,5 +177,7 @@ real PR merge, deployment or production-side action is part of validation.
   versions. Its one finding, a gitlink move hidden by `submodule.<name>.ignore=all`
   from the early check, is fixed with `--ignore-submodules=none` and two tests seen
   failing first. A separate error-path review found no defect.
-- Not yet covered: an independent re-review of that follow-up fix and a live host
-  run of 1.4.0.
+- Independent re-review of the follow-up fix (d0f11dd): PASS. The flag also beats
+  `-c diff.ignoreSubmodules=all`, and both new tests fail with it removed and pass
+  with it.
+- Not yet covered: a live host run of 1.4.0.
