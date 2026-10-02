@@ -24,7 +24,7 @@ export const meta = {
 
 // Kept equal to the skill version by tests/test_version.py; a saved copy that install.sh did not
 // refresh refuses args produced by another version of plan.py.
-const SCRIPT_VERSION = '0.7.0'
+const SCRIPT_VERSION = '0.7.1'
 
 const A = args
 if (!A || typeof A !== 'object' || !Array.isArray(A.tasks) || !A.schemas || !(A.scripts || A.authority)) {

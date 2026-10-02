@@ -1,0 +1,39 @@
+{
+  "source_revision": "6679439a44eb0b80fdbff59dfe995132ba44f9f9",
+  "disposition": "integrated",
+  "rationale": "Orchestrate 0.7.1 is a prompt-audit release: SKILL.md wording (the delegation rule, explorers only where step 2's targeted reads are not enough), the restored 'Hypotheses to confirm' heading in references/routing.md, new AGENTS.md rules on contract and error-path tests, and the loop's SCRIPT_VERSION 0.7.0 -> 0.7.1 with no other loop change. The shipped workflows/orchestrate-execute.js is replaced by the upstream file at 6679439 byte for byte (tests.test_workflows compares it with the submodule, and workflow_steps reads its SCRIPT_VERSION for the args). The SKILL.md and routing wording is orchestrate's own coordinator prompt, which Delivery does not ship, so it is not adopted. Mapped files also changed by two local 1.4.0 fixes: the gate step in workflow_steps.py passes a task gate's planned timeout (--timeout), run_engine.py validates and uses planned gate and case timeouts (1-3600 s, default 300) and records timeout_seconds in the receipt, delivery.py's gate --timeout defaults to the plan, and run-contract.md and host-execution.md document it; capture_verification refuses a changed gitlink (submodule_changed) using new snapshots.py helpers, and README.md notes that unchanged submodules are supported. PROVENANCE.md carries the new source rows and a 1.4.0 sync section. The loop contract is unchanged.",
+  "reviewer": "Not independently reviewed yet. The implementer checked the upstream diffs and the local changes on October 2, 2026 in the 1.4.0 release run; a different reviewer must inspect the actual source changes and tests before merge, as docs/SYNCHRONIZATION.md requires. Review prose does not authenticate identity.",
+  "tests": "Regression tests written first and seen failing before their fixes on October 2, 2026: tests.test_snapshots test_gitlink_is_recorded_without_content, test_changed_gitlink_between_snapshots_is_reported, test_staged_gitlink_change_is_found_before_capture; tests.test_rich_integration test_unchanged_submodule_does_not_block_capture_verification (red: UNSUPPORTED_TREE) and test_changed_gitlink_refuses_capture_verification_with_a_clear_code (red: DIRECTORY_SCOPE instead of submodule_changed); tests.test_run_engine GateTimeoutTests (six tests; red: planned timeouts ignored and accepted unvalidated, no timeout_seconds) and tests.test_workflows test_the_gate_step_passes_each_planned_gate_timeout (red: no --timeout passed). All pass after the fixes. Full suite on October 2, 2026 before this record, on the final code (one later docstring-only edit in snapshots.py): tools tests 20/20 and the plug-in catalog 529/529 in eight shards, 0 skipped, 0 failures. make check after this record. No live host run of 1.4.0 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/workflows/orchestrate-execute.js",
+    "skill/SKILL.md",
+    "skill/references/routing.md",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "VERSION"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/scripts/validate_bundle.py",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_steps.py",
+    "plugins/delivery-harness/skills/delivery/workflows/orchestrate-execute.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_run_engine.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}
