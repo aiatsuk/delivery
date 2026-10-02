@@ -15,7 +15,7 @@
         "plugins/delivery-harness/tests/test_run_engine.py": "dd6fb86e36eef4fad7393a40756dd96a255c611c984ea2453883472e631005bd"
       },
       "review_file": "docs/integrations/factory/1.4.0-sync.json",
-      "review_sha256": "64fe47fb74d924e7a8eddf86c4c75c8d0f059b6eb330b2406fc99c77e5d84285",
+      "review_sha256": "136d68e4398ec27209e5550d73c2abcf6412284e0a6b8db5b7772367fa718f6b",
       "reviewed_revision": "ba64c6220167364e4c1f8d209e9ed77f12f57968"
     },
     "orchestrate": {
@@ -45,7 +45,7 @@
         "plugins/delivery-harness/tests/workflow_harness.js": "a157411cb5ca81e001a764ff0507fc3641500e52023c84dca49778d514028769"
       },
       "review_file": "docs/integrations/orchestrate/0.7.1-sync.json",
-      "review_sha256": "7e7daa28afafcba13fbb66631684e77c75fde1ecb5471fb7e8408bf31727312e",
+      "review_sha256": "007eb2e14c540e763f02d3faa9e2dedc8b2f1da0ce37d7f822a00c1a4f90a6de",
       "reviewed_revision": "6679439a44eb0b80fdbff59dfe995132ba44f9f9"
     },
     "product-driven-development": {
@@ -61,7 +61,7 @@
         "plugins/delivery-harness/tests/test_product.py": "28f92139c3b985e575ce473eb89679aef681b5164e05990c4c388709df863102"
       },
       "review_file": "docs/integrations/product-driven-development/1.4.0-sync.json",
-      "review_sha256": "40eb0bc72e1fe530eeee1d631f6a9fb73fab562901461964f31a9446349a2259",
+      "review_sha256": "8f90b506919f62e6a333fc151a12d29b4b1199b547752dfc97c5a9c4d674b344",
       "reviewed_revision": "ebe92fbdda305fbf117badb16fecff233d5de287"
     },
     "spec-driven-development": {
@@ -104,7 +104,7 @@
         "plugins/delivery-harness/tests/test_snapshots.py": "c3791c6bf245a7f30507090049e799aa7715374efbd117a90b55aa5eeaf6e024"
       },
       "review_file": "docs/integrations/spec-driven-development/1.4.0-sync.json",
-      "review_sha256": "3a7717b6da93d1caff8f4c76dbf1c44179465eb755d5dacb42f59d42a07e8c01",
+      "review_sha256": "2661bc3b6a3e3772cada1228b69ffea7d84a5aabdea01410a0b09e808c8b51c5",
       "reviewed_revision": "e9c04b6ce01e855f808af3faadfc1cb36776270a"
     }
   }
