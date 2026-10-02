@@ -52,7 +52,10 @@ root paths, traversal or Git metadata. Dependency cycles and un-serialized overl
 are errors. A task owns changes only in its scope and returns a staged patch.
 
 Task gates and integrated cases have `command` (an argv array), `risk` (`safe`,
-`external`, `destructive`), `oracle`, `cleanup`. Integrated cases also have `id`
+`external`, `destructive`), `oracle`, `cleanup`, and an optional `timeout` in whole
+seconds from 1 to 3600 (default 300) for a long but legitimate gate such as a full
+test suite; `gate --timeout` overrides it, and the loop's gate step passes it on.
+The receipt records the timeout used. Integrated cases also have `id`
 and `requirements`; non-Small cases require `check_case`. An integrated case may
 declare its own named `resources`; otherwise it holds every task resource. In the rich check JSON,
 that case's `delivery_command` must exactly equal the argv array. Rich safety maps

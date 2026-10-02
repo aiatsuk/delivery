@@ -95,7 +95,7 @@ def parser():
             q.add_argument("--task")
             q.add_argument("--case")
             q.add_argument("--index", type=int, default=0)
-            q.add_argument("--timeout", type=int, default=300)
+            q.add_argument("--timeout", type=int, default=None, help="Seconds (1-3600); default: the gate's planned timeout, else 300.")
         if name == "gate-recover":
             q.add_argument("--job", required=True)
             q.add_argument("--evidence-file", required=True)

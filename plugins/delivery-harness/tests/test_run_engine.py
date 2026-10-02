@@ -383,5 +383,76 @@ class RunTests(RunFixture):
         self.assertEqual(e.ready(self.root)["state"], "READY_TO_PUBLISH")
 
 
+class GateTimeoutTests(RunFixture):
+    """A plan may give each task gate and integrated case its own timeout; --timeout still overrides it."""
+
+    SLEEP = [sys.executable, "-B", "-c", "import time; time.sleep(4)"]
+
+    def test_plan_rejects_timeouts_outside_one_to_3600_whole_seconds(self):
+        for bad in (0, 3601, -5, 1.5, "60", True, None):
+            for where in ("task", "case"):
+                with self.subTest(timeout=bad, where=where):
+                    value = plan()
+                    target = value["tasks"][0]["gates"][0] if where == "task" else value["verification"][0]
+                    target["timeout"] = bad
+                    with self.assertRaises(e.RunError) as error:
+                        e.validate_plan(value)
+                    self.assertEqual("invalid_timeout", error.exception.code)
+        value = plan()
+        value["tasks"][0]["gates"][0]["timeout"] = 3600
+        value["verification"][0]["timeout"] = 1
+        validated = e.validate_plan(value)
+        self.assertEqual((3600, 1), (validated["tasks"][0]["gates"][0]["timeout"], validated["verification"][0]["timeout"]))
+
+    def test_a_task_gate_uses_its_planned_timeout_when_none_is_given(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [{**gate(self.SLEEP), "timeout": 1}]
+        self.begin(value)
+        self.implement()
+        receipt = e.execute_gate(self.root, task_id="value")
+        self.assertTrue(receipt["timed_out"])
+        self.assertFalse(receipt["passed"])
+        self.assertEqual(1, receipt["timeout_seconds"])
+        self.assertLess(receipt["duration_seconds"], 4)
+
+    def test_an_explicit_timeout_overrides_the_planned_one(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [{**gate([sys.executable, "-B", "-c", "import time; time.sleep(1.5)"]), "timeout": 1}]
+        self.begin(value)
+        self.implement()
+        receipt = e.execute_gate(self.root, task_id="value", timeout=30)
+        self.assertEqual((False, True, 30), (receipt["timed_out"], receipt["passed"], receipt["timeout_seconds"]))
+        with self.assertRaises(e.RunError) as error:
+            e.execute_gate(self.root, task_id="value", timeout=0)
+        self.assertEqual("invalid_timeout", error.exception.code)
+
+    def test_a_gate_without_a_planned_timeout_keeps_the_300_second_default(self):
+        self.begin()
+        self.implement()
+        receipt = e.execute_gate(self.root, task_id="value")
+        self.assertEqual((True, 300), (receipt["passed"], receipt["timeout_seconds"]))
+
+    def test_an_integrated_case_uses_its_planned_timeout(self):
+        value = plan()
+        value["verification"][0] = {**value["verification"][0], "command": self.SLEEP, "timeout": 1}
+        self.begin(value)
+        self.implement()
+        self.verify()
+        e.integrate(self.root)
+        receipt = e.execute_gate(self.root, case_id="value-check")
+        self.assertEqual((True, False, 1), (receipt["timed_out"], receipt["passed"], receipt["timeout_seconds"]))
+
+    def test_the_cli_gate_command_leaves_the_timeout_to_the_plan(self):
+        value = plan()
+        value["tasks"][0]["gates"] = [{**gate(self.SLEEP), "timeout": 1}]
+        self.begin(value)
+        self.implement()
+        result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "delivery.py"), "gate", "--run", str(self.root), "--task", "value"],
+                                capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        receipt = json.loads(result.stdout)["result"]
+        self.assertEqual((True, 1), (receipt["timed_out"], receipt["timeout_seconds"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,9 @@ unit fixture, stored PID, stale handle or narrated “agent” is not a live wor
 
 Run planned gate commands in the foreground. Do not daemonize a test or leave a
 background server/device session holding a resource after the command returns.
+A gate is stopped after its planned `timeout` (300 s when the plan names none, at
+most 3600 s). For a gate longer than the host's command limit, run the `gate`
+command in the background and wait for it rather than cutting it short.
 Use explicit cleanup and host session ownership for those resources. The CLI
 tracks its runner and direct children, not every detached descendant.
 

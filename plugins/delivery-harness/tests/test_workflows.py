@@ -225,6 +225,22 @@ class StepClassificationTests(unittest.TestCase):
         self.assertIn("resource_recovery_required", out["blocked"])
         self.assertEqual({"exit_code", "tail", "tree", "head", "results", "unstaged", "untracked", "outside_scope", "blocked"}, set(out))
 
+    def test_the_gate_step_passes_each_planned_gate_timeout(self):
+        gates = [{**gate(), "timeout": 1200}, gate()]
+        plan_run = {"plan": {"tasks": [{"id": "value", "paths": ["value.txt"], "gates": gates}]}, "tasks": {"value": {"path": "/wt"}}}
+        calls = []
+        def fake(*arguments):
+            calls.append(arguments)
+            return True, {"passed": True, "unchanged": True, "outcome": "ok", "exit_code": 0, "log": "/log"}
+        with mock.patch.object(self.steps, "run_state", return_value=plan_run), \
+                mock.patch.object(self.steps, "delivery", side_effect=fake), \
+                mock.patch.object(self.steps, "git", return_value=(1, "")), \
+                mock.patch.object(self.steps, "worktree_state", return_value={"unstaged": [], "untracked": [], "outside_scope": []}):
+            out = self.steps.step_gate(self.args)
+        self.assertEqual(0, out["exit_code"])
+        self.assertEqual(["--timeout", "1200"], list(calls[0][-2:]))
+        self.assertNotIn("--timeout", calls[1])
+
     def test_a_journal_problem_blocks_without_abandoning(self):
         calls = []
         def fake(*arguments):
