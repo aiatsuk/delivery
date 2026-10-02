@@ -1,0 +1,20 @@
+{
+  "source_revision": "ebe92fbdda305fbf117badb16fecff233d5de287",
+  "disposition": "integrated",
+  "rationale": "Same pinned source, no upstream change. PROVENANCE.md now names the exact commit in the product-driven-development source row; the helper, references and tests are unchanged.",
+  "reviewer": "Not independently reviewed yet. The implementer checked the upstream diffs and the local changes on October 2, 2026 in the 1.4.0 release run; a different reviewer must inspect the actual source changes and tests before merge, as docs/SYNCHRONIZATION.md requires. Review prose does not authenticate identity.",
+  "tests": "The product helper and its tests are unchanged; they ran in the full suite. Full suite on October 2, 2026 before this record, on the final code (one later docstring-only edit in snapshots.py): tools tests 20/20 and the plug-in catalog 529/529 in eight shards, 0 skipped, 0 failures. make check after this record. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/product-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/README.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/artifacts.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/session-evidence.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/session_evidence.py",
+    "plugins/delivery-harness/skills/delivery/scripts/product.py",
+    "plugins/delivery-harness/tests/product_memory/test_session_evidence.py",
+    "plugins/delivery-harness/tests/test_product.py"
+  ]
+}
