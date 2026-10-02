@@ -69,7 +69,8 @@ Python 3.10+, Git and macOS/Linux for local coordination; no Python packages are
 required. GitHub delivery additionally needs `gh`, authenticated access to the
 repository, `origin` pointing to github.com, and `main`. The initial Git provider
 does not support other forges, bare primaries, submodule implementation changes
-or multi-repository atomic delivery. Host tools supply native build/test devices
+or multi-repository atomic delivery. Unchanged submodules are fine: snapshots record
+their commits, and Medium/Large verification refuses a moved gitlink with `submodule_changed`. Host tools supply native build/test devices
 and actual agents. Missing capabilities are reported, not simulated.
 
 The primary checkout is never an implementation directory. Runs live outside all

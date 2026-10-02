@@ -37,6 +37,51 @@ class SnapshotTests(RunFixture):
         self.assertEqual(os.readlink(path / "link"), "value.txt")
         self.assertFalse((path / "cache").exists())
 
+    def gitlink(self, path="vendor/lib"):
+        """Commit a gitlink entry (mode 160000) pointing at a commit of a separate repository."""
+        library = self.home / ("library-" + path.replace("/", "-"))
+        library.mkdir()
+        git(library, "init", "--initial-branch=main")
+        git(library, "config", "user.name", "Fixture Maintainer")
+        git(library, "config", "user.email", "fixture@example.invalid")
+        (library / "lib.txt").write_text("one\n")
+        git(library, "add", "lib.txt")
+        git(library, "commit", "-m", "First library commit")
+        first = git(library, "rev-parse", "HEAD")
+        (library / "lib.txt").write_text("two\n")
+        git(library, "commit", "-am", "Second library commit")
+        second = git(library, "rev-parse", "HEAD")
+        git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{first},{path}")
+        git(self.repo, "commit", "-m", "Add a gitlink fixture")
+        return first, second
+
+    def test_gitlink_is_recorded_without_content(self):
+        first, _ = self.gitlink()
+        result = self.capture()
+        self.assertEqual([{"path": "vendor/lib", "commit": first}], result["gitlinks"])
+        self.assertFalse((Path(result["path"]) / "vendor/lib").exists())
+        self.assertEqual((Path(result["path"]) / "value.txt").read_text(), "before\n")
+        self.assertEqual(1, result["files"])
+
+    def test_changed_gitlink_between_snapshots_is_reported(self):
+        first, second = self.gitlink()
+        before = self.capture("before")
+        git(self.repo, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
+        git(self.repo, "commit", "-m", "Move the gitlink fixture")
+        after = self.capture("after")
+        self.assertEqual([{"path": "vendor/lib", "before": first, "after": second}], snapshots.gitlink_changes(before, after))
+        self.assertEqual([], snapshots.gitlink_changes(before, before))
+
+    def test_staged_gitlink_change_is_found_before_capture(self):
+        first, second = self.gitlink()
+        base = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual([], snapshots.staged_gitlink_changes(str(self.repo), base))
+        git(self.repo, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
+        self.assertEqual([{"path": "vendor/lib", "before": first, "after": second}], snapshots.staged_gitlink_changes(str(self.repo), base))
+        git(self.repo, "update-index", "--force-remove", "vendor/lib")
+        self.assertEqual([{"path": "vendor/lib", "before": first, "after": None}], snapshots.staged_gitlink_changes(str(self.repo), base))
+
+
     def test_existing_destination_refused(self):
         self.capture()
         with self.assertRaisesRegex(snapshots.git_ops.GitError, "immutable"):
