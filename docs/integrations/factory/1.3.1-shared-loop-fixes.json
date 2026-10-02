@@ -1,0 +1,19 @@
+{
+  "source_revision": "c431b34e4acd6882f3a03635d8aea64bfec6e650",
+  "disposition": "integrated",
+  "rationale": "Local 1.3.1 change, same pinned source. Mapped files changed by the shared-loop fixes and the prompt audit: run_engine.py records a failed command under its own history event (integration_commit_failed) and runs gates without writing Python bytecode, test_run_engine.py covers the bytecode-free gate, and SKILL.md gains a progress-update sentence and loses a repository-specific line, the 'no hidden tier pins' phrase and a maintainer-only compatibility claim. The factory decision catalogue, gate rules, budgets and blocker codes are unchanged; a gate still passes or fails on its exit code and worktree effect, now without false bytecode changes.",
+  "reviewer": "The factory-mapped code changes (PYTHONDONTWRITEBYTECODE in the gate runner, the integration_commit_failed history event, the bytecode test) came after the October 1, 2026 independent review, which covered only the first four 1.3.1 fixes and none of these. Review of the full fixes diff bf6d591..75f9991 on October 2, 2026 in the 1.4.0 release run (conformance and adversary lenses, both PASS): the staged tree matched 75f9991 exactly, the bytecode-free gate was checked red/green (removing PYTHONDONTWRITEBYTECODE makes test_python_gate_writes_no_bytecode_into_the_worktree fail), the identity pre-check and the integration_commit_failed history event were read against publisher.commit and run_engine.transaction, and the targeted tests reran OK (41 tests). It raised one minor note, not fixed in 1.3.1: check_identity also runs on an idempotent commit retry, so recovering an already-made commit needs a git identity too. The prompt-audit edits had a conformance review on October 2, 2026 in the same run: PASS, byte-identical to the approved proposed diff. Review prose does not authenticate identity.",
+  "tests": "tests.test_run_engine test_python_gate_writes_no_bytecode_into_the_worktree, seen failing without its fix in the October 2 review, and the integration_commit_failed history assertion in tests.test_publisher, which passes but was not seen failing without its fix in review. Both came in 75f9991, after the 515/515 full plug-in suite run at ab25cdc, so the full suite has not run with them; the October 2 review reran the targeted tests (41 OK). Bundle validation after the prompt-audit edits; make check after this record. No live host run of 1.3.1 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/factory-qa-loop/SKILL.md",
+    "skills/factory-gates/SKILL.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py",
+    "plugins/delivery-harness/tests/test_run_engine.py"
+  ]
+}

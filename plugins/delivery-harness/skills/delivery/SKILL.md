@@ -14,8 +14,7 @@ five top-level skills competing for control. This bundle needs no other plugin.
 ## Non-negotiable contract
 
 - Follow system, host and repository instructions first. Read applicable AGENTS.md
-  (and its linked required docs) before repository actions. For aiatsuk/platform,
-  its fresh-main/worktree rule and English/history/gateway policies still apply.
+  (and its linked required docs) before repository actions.
 - A request to inspect, diagnose or explain is read-only. Do not implement,
   publish, open a PR or write product notes unless that request includes it.
 - A request to implement grants only its stated scope. Distinguish semantic
@@ -108,8 +107,8 @@ JSON, no reusing old approval. Preserve old artifacts and worktrees.
 This skill explicitly delegates bounded implementation and independent review
 when the host supports them. Use the host's actual agent facilities described in
 the host reference, not an untracked shell process or a second competing harness.
-Use configured/inherited models unless the user explicitly selects a model; there
-are no hidden tier pins. Ask once if required capabilities or cost authority are missing.
+Use configured/inherited models unless the user explicitly selects a model.
+Ask once if required capabilities or cost authority are missing.
 
 On a host with a workflow runtime (Claude Code), run the shared execution loop,
 so every step is code and agent identity and results come from the host journal
@@ -232,6 +231,9 @@ owner, with evidence and the next action. Never invent product decisions.
 
 ## Resume and reporting
 
+Tell the user in a sentence or two when the run changes state, hits a blocker or
+needs a decision, and what comes next, so a long loop does not look stalled.
+
 Use `list` and `status`, inspect source-of-truth run artifacts and query actual host
 handles. Recover the current run instead of copying status from memory. Check
 plan drift, worktree identity, dependency receipts, logs and authority before
@@ -241,6 +243,5 @@ For a stranded gate job, follow the run contract's process-checked recovery; nev
 delete its locks or assume the resource is free because the runner disappeared.
 
 Keep user updates short and evidence-backed. State exactly what passed, failed,
-was skipped and remains unverified. Include the PR/run/evidence links. Do not
-claim Claude/Codex runtime compatibility from manifest validation alone, or live
-GitHub delivery from a fake provider. Read-only status never creates new state.
+was skipped and remains unverified. Include the PR/run/evidence links.
+Read-only status never creates new state.

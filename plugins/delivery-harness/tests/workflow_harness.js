@@ -5,7 +5,7 @@
 // The scenario holds `args` (the loop's args global), `journal` (the host journal directory to
 // write) and `agents`: a map from an agent label to a list of scripted behaviours used in order.
 // Relay agents (their prompt ends with the helper command) really run that command with bash and
-// return the JSON it prints, as a relay agent would. An implementer behaviour is
+// return the JSON it prints, as a relay agent would, keeping only the fields their schema lists. An implementer behaviour is
 // {write: {path: content}, report: {...overrides}} or null (the agent fails); it edits and stages
 // the files in the worktree named by its prompt and returns a report with the dispatch ID and the
 // staged tree. A reviewer behaviour is {verdict, evidence?, defects?} or null. Unlisted
@@ -55,6 +55,12 @@ function relay(prompt) {
   }
 }
 
+// A relay returns structured output against its schema, so a field the schema does not list is lost.
+function structured(value, schema) {
+  if (!schema || !schema.properties || !value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key in schema.properties))
+}
+
 function implement(prompt, behaviour) {
   const worktree = match(prompt, /work only inside the worktree '([^']+)'/)
   const dispatch = match(prompt, /dispatch_id must be exactly (\S+?)\./)
@@ -91,7 +97,7 @@ async function agent(prompt, opts = {}) {
   if (scripted === null) {
     value = null
   } else if (RELAYS.has(kind)) {
-    value = relay(prompt)
+    value = structured(relay(prompt), opts.schema)
   } else if (kind === 'impl' || kind === 'rework') {
     value = implement(prompt, scripted)
   } else if (kind === 'review') {

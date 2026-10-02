@@ -1,0 +1,19 @@
+{
+  "source_revision": "ebe92fbdda305fbf117badb16fecff233d5de287",
+  "disposition": "integrated",
+  "rationale": "Local 1.3.1 prompt-audit change, same pinned source. The 'Provenance' paragraph moved unchanged from internal/product/README.md to plugins/delivery-harness/PROVENANCE.md; the README keeps the Markdown model, ownership rules and opt-in bounded session evidence. The helper, references and tests, including the adapted path-safety fix, are unchanged. No native session data is shipped.",
+  "reviewer": "Conformance review on October 2, 2026 in the release run: PASS, the staged change byte-identical to the approved proposed diff, with the moved paragraph checked unchanged in PROVENANCE.md. Review prose does not authenticate identity.",
+  "tests": "Bundle validation (scripts/validate_bundle.py) after the edit and make check after this record. The helper and its tests are unchanged, so the product suite was not rerun for this record. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/product-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/skills/delivery/internal/product/README.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/artifacts.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/session-evidence.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/session_evidence.py",
+    "plugins/delivery-harness/skills/delivery/scripts/product.py",
+    "plugins/delivery-harness/tests/product_memory/test_session_evidence.py",
+    "plugins/delivery-harness/tests/test_product.py"
+  ]
+}

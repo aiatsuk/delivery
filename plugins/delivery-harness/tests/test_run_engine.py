@@ -261,6 +261,20 @@ class RunTests(RunFixture):
         self.assertFalse(result["unchanged"])
         self.assertFalse(result["passed"])
 
+    def test_python_gate_writes_no_bytecode_into_the_worktree(self):
+        value = plan()
+        value["tasks"][0]["paths"] = ["value.txt", "helper.py"]
+        # Imports a module from the worktree, which has no .gitignore, without -B.
+        value["tasks"][0]["gates"] = [gate([sys.executable, "-c", "import helper; assert helper.VALUE == 'after'"])]
+        self.begin(value)
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PYTHONDONTWRITEBYTECODE", None)
+            path = self.implement(changes={"value.txt": "after\n", "helper.py": "VALUE = 'after'\n"})
+            result = e.execute_gate(self.root, task_id="value")
+        self.assertEqual((0, True, True), (result["exit_code"], result["unchanged"], result["passed"]))
+        self.assertFalse((path / "__pycache__").exists())
+        self.assertEqual(["A  helper.py", "M  value.txt"], git(path, "status", "--porcelain", "--untracked-files=all", "--ignored").splitlines())
+
     def test_task_external_gate_needs_explicit_authority(self):
         value = plan(); value["tasks"][0]["gates"][0]["risk"] = "external"
         self.begin(value); self.implement()

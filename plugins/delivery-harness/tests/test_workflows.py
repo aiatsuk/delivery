@@ -166,6 +166,48 @@ class LoopTests(RunFixture):
         self.assertEqual((None, "PASS"), (review["task"], review["verdict"]))
 
 
+class StepSchemaTests(unittest.TestCase):
+    """A relay returns structured output against its schema, so every field the loop reads must be listed."""
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_steps
+        self.steps = workflow_steps
+        self.source = LOOP.read_text(encoding="utf-8")
+
+    def reads(self, names, text=None):
+        text = self.source if text is None else text
+        fields = set()
+        for name in names:
+            fields |= set(re.findall(rf"(?<![\w.]){name}\.(\w+)", text))
+            if re.search(rf"blockedBy\({name}\)", text):
+                fields.add("blocked")
+        return fields
+
+    def assert_listed(self, schema, fields):
+        missing = sorted(fields - set(schema["properties"]))
+        self.assertEqual([], missing, f"the loop reads fields its schema drops: {missing}")
+
+    def test_every_field_the_loop_reads_from_a_recorded_step_is_in_the_step_schema(self):
+        authority = self.source[self.source.index("function record("):]
+        names = set(re.findall(r"const (\w+) = await record\(", authority))
+        self.assertTrue({"prep", "reg", "got", "back", "open", "close"} <= names, names)
+        fields = self.reads(names, authority)
+        self.assertTrue({"worktree", "head", "branch", "spec_sha256", "dispatch", "accepted", "tokens", "verdict"} <= fields, fields)
+        self.assert_listed(self.steps.STEP, fields)
+
+    def test_every_field_the_loop_reads_from_a_gate_or_finish_is_in_its_schema(self):
+        self.assert_listed(self.steps.GATE, self.reads(["gate"]))
+        self.assert_listed(self.steps.FINISH, self.reads(["finish"]))
+        defects = self.source[self.source.index("function gateDefects("):self.source.index("\n}\n", self.source.index("function gateDefects("))]
+        self.assert_listed(self.steps.GATE["properties"]["results"]["items"], self.reads(["r"], defects))
+
+    def test_the_loop_uses_only_schemas_the_args_ship(self):
+        authority = self.source[self.source.index("function record("):]
+        used = set(re.findall(r"A\.schemas\.(\w+)", authority))
+        self.assertTrue(used <= {"step", "gate", "finish", "verdict", "report"}, used)
+
+
 class StepClassificationTests(unittest.TestCase):
     """Which engine refusals block the task and which send it back to rework (engine calls mocked)."""
 

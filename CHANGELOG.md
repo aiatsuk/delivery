@@ -1,5 +1,40 @@
 # Changes
 
+## 1.3.1
+
+Fixes for the shared execution loop found in real runs.
+
+- The step schema in `workflow_steps.py args` lists every field the loop reads off
+  a recorded step (prepare, dispatch, collect, review-open, review-close) and the
+  gate result rows. A relay returning structured output dropped them, so every task
+  ended BLOCKED "the preparation named no worktree or starting commit". A test
+  checks the schemas against the shipped loop, and the test harness now keeps only
+  schema fields, as a relay does.
+- `commit` refuses a message that names an agent before any state change, with
+  `HISTORY_POLICY`; it no longer invalidates the run and forces re-verification.
+- A second commit on the integration branch no longer fails when an earlier commit
+  deleted a file: only paths whose staged state differs from HEAD reach
+  `git commit --only`.
+- `workflow_steps.py args --integration` reports the integration's base after
+  `refresh`, so integration reviewers diff against the new base.
+- Gates run with `PYTHONDONTWRITEBYTECODE=1`: a passing Python gate in a repository
+  that does not ignore `__pycache__/` no longer fails as changing the worktree.
+- `commit` refuses with `GIT_IDENTITY` before any state change when git cannot
+  resolve an author and committer, instead of failing inside the commit and
+  sending the run back to verification. A failed commit is recorded in the run
+  history as `integration_commit_failed`, not `integration_committed`.
+- Prompt audit: `SKILL.md` asks for a short progress update when a run changes
+  state and drops a repository-specific line, the "no hidden tier pins" phrase and
+  a maintainer-only compatibility claim; the spec-engine and product-memory
+  vendoring notes moved into `PROVENANCE.md`.
+- Review records renewed at the unchanged pins (orchestrate 3e5886a, factory
+  c431b34, spec-driven-development 40b0c1f, product-driven-development ebe92fb):
+  `docs/integrations/orchestrate/0.7.0-shared-loop-fixes.json` now covers all six
+  fixes and the prompt-audit edits, with new
+  `docs/integrations/factory/1.3.1-shared-loop-fixes.json`,
+  `docs/integrations/spec-driven-development/1.3.1-prompt-audit.json` and
+  `docs/integrations/product-driven-development/1.3.1-prompt-audit.json`.
+
 ## 1.3.0
 
 One execution loop for Delivery and orchestrate.

@@ -188,7 +188,37 @@ class PublisherTests(PublisherFixture):
             self.assert_code("commit_changed", p.commit, self.root, "Update the value")
         current = e.load(self.root)
         self.assertEqual(("VERIFYING", None, "commit"), (current["state"], current["validated"], current["recovery"]["operation"]))
+        # A failed commit is not recorded under the success event.
+        self.assertEqual("integration_commit_failed", current["history"][-1]["event"])
         self.assertEqual("unverified\n", (Path(run["integration"]["path"]) / "value.txt").read_text())
+
+    def test_commit_refuses_an_agent_name_before_any_state_change(self):
+        before = self.integrated()
+        with mock.patch.object(p.git_ops, "commit_changes", wraps=p.git_ops.commit_changes) as commit:
+            self.assert_code("HISTORY_POLICY", p.commit, self.root, "Update the Codex adapter value")
+        commit.assert_not_called()
+        self.assertEqual(before, e.load(self.root))
+        self.assertEqual("READY_TO_PUBLISH", e.load(self.root)["state"])
+
+    def test_commit_refuses_a_missing_git_identity_before_any_state_change(self):
+        before = self.integrated()
+        git(self.repo, "config", "--unset", "user.name")
+        git(self.repo, "config", "--unset", "user.email")
+        # Never guess an identity from the host name, so the fixture behaves the same on every machine.
+        git(self.repo, "config", "user.useConfigOnly", "true")
+        names = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL")
+        with mock.patch.dict(os.environ):
+            for name in names:
+                os.environ.pop(name, None)
+            with mock.patch.object(p.git_ops, "commit_changes", wraps=p.git_ops.commit_changes) as commit:
+                self.assert_code("GIT_IDENTITY", p.commit, self.root, "Preserve the expected fixture value")
+            commit.assert_not_called()
+            self.assertEqual(before, e.load(self.root))
+        identity = {"GIT_AUTHOR_NAME": "Fixture Maintainer", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                    "GIT_COMMITTER_NAME": "Fixture Maintainer", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        with mock.patch.dict(os.environ, identity):
+            committed = p.commit(self.root, "Preserve the expected fixture value")
+        self.assertEqual(("READY_TO_PUBLISH", committed["validated"]["head"]), (committed["state"], committed["commit"]["head"]))
 
     def test_commit_recovers_exact_commit_when_the_response_is_lost(self):
         self.integrated()
@@ -303,6 +333,17 @@ class PublisherTests(PublisherFixture):
         self.assertEqual(original["pr"]["head"], push.call_args.kwargs["expected_remote_head"])
         self.assertEqual((7, fresh), (published["pr"]["number"], published["pr"]["base_sha"]))
         self.assertEqual(1, sum(call[0] == "create" for call in self.provider.calls))
+
+    def test_integration_review_args_use_the_refreshed_base(self):
+        import workflow_steps
+        original = self.published()
+        self.grant_merge()
+        fresh = self.remote_commit({"new-main.txt": "Fresh main.\n"})
+        p.refresh(self.root, provider=self.provider)
+        args = mock.Mock(run=str(self.root), task=None, lens=None, model=None, effort=None, integration=True)
+        flow = workflow_steps.build_args(args)
+        self.assertNotEqual(original["base_sha"], fresh)
+        self.assertEqual(fresh, flow["integration"]["base_sha"])
 
     def test_rebase_conflict_preserves_operation_and_resumes_after_explicit_fixture_fix(self):
         original = self.published()
