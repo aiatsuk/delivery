@@ -79,7 +79,9 @@ GATE = {
     "type": "object",
     "properties": {
         "exit_code": {"type": "integer"}, "tail": {"type": "string"}, "tree": {"type": "string"}, "head": {"type": "string"},
-        "results": {"type": "array", "items": {"type": "object"}}, "unstaged": PATHS, "untracked": PATHS, "outside_scope": PATHS,
+        "results": {"type": "array", "items": {"type": "object", "properties": {
+            "command": {"type": "string"}, "rc": {"type": "integer"}, "outcome": {"type": "string"}, "log": {"type": "string"}}}},
+        "unstaged": PATHS, "untracked": PATHS, "outside_scope": PATHS,
         "blocked": {"type": "string"},
     },
     "required": ["exit_code", "tail", "tree", "head", "results", "unstaged", "untracked", "outside_scope"],
@@ -90,9 +92,16 @@ FINISH = {
                    "verify_clean_exit": {"type": "integer"}, "output": {"type": "string"}, "blocked": {"type": "string"}},
     "required": ["patch", "sha256", "files", "tree", "verify_clean_exit", "output"],
 }
+# One shape for every recorded step; a relay returns structured output against it and drops any field
+# it does not list, so it names every field the loop reads off a step (prepare, dispatch, collect,
+# review-open, review-close). tests/test_workflows.py checks it against the shipped loop.
 STEP = {
     "type": "object",
-    "properties": {"exit_code": {"type": "integer"}, "output": {"type": "string"}, "blocked": {"type": "string"}},
+    "properties": {"exit_code": {"type": "integer"}, "output": {"type": "string"}, "blocked": {"type": "string"},
+                   "worktree": {"type": "string"}, "branch": {"type": "string"}, "head": {"type": "string"},
+                   "worktree_id": {"type": "string"}, "spec_sha256": {"type": "string"}, "dispatch": {"type": "string"},
+                   "accepted": {"type": "boolean"}, "tokens": {"type": "object", "additionalProperties": {"type": "string"}},
+                   "verdict": {"type": "string"}},
     "required": ["exit_code", "output"],
 }
 
@@ -366,7 +375,8 @@ def build_args(a) -> dict:
             raise StepError("the run has no integration worktree; run integrate first")
         plan = run["plan"]
         integration = {
-            "worktree": owner["path"], "base_sha": run["base_sha"], "acceptance": plan.get("goal", ""),
+            # refresh rebases the integration and records the new base on it, not on the run.
+            "worktree": owner["path"], "base_sha": owner["base_sha"], "acceptance": plan.get("goal", ""),
             "requirements": [f"{r.get('id', '')}: {r.get('oracle', r.get('text', ''))}".strip(": ") for r in plan.get("requirements", [])],
             "gate": [argv_text(c["command"]) for c in plan.get("verification", []) if c.get("risk", "safe") == "safe"],
             "brief": None, "lenses": lenses,

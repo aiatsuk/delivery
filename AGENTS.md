@@ -21,3 +21,10 @@ Never publish private session history, machine paths, credentials, local run sta
 or private repository snapshots. No whole-directory copy from an installed cache
 into Git. Do not update source pins as proof of semantic adoption: follow the
 review-record protocol and keep upstream licenses/notices intact.
+
+Step results, relay formats and error payloads are contracts between the shipped
+workflow and the scripts. When either side changes, a test must check that every
+field the consumer reads is in what the producer emits. Test refusal and `blocked`
+branches like success paths, and check policy inputs (commit messages, PR text)
+before any state change so a refusal never invalidates a run. A release is done
+after one live local-only run of the exported package through the shipped workflow.

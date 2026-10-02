@@ -267,6 +267,12 @@ def _recover_exact_commit(path, intent):
 
 def commit(root, message, expected_revision=None):
     message = _history(message, "Commit message", 10_000)
+    # The commit refuses agent names; a refusal inside the transaction would invalidate the run.
+    git_ops.check_message(message)
+    # So is a missing author or committer identity, which git reports only when it commits.
+    integration = engine.load(root).get("integration")
+    if integration:
+        git_ops.check_identity(integration["path"])
     failure = None
     with engine.transaction(root, "integration_committed", expected_revision) as run:
         engine.assert_gates_idle(run)
@@ -306,6 +312,7 @@ def commit(root, message, expected_revision=None):
                 _invalidate(run)
                 run["state"] = "VERIFYING"
                 _recovery(run, "commit", error)
+                run["failed_event"] = "integration_commit_failed"
                 failure = error
     if failure:
         raise failure

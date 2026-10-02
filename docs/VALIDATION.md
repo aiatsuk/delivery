@@ -119,3 +119,37 @@ real PR merge, deployment or production-side action is part of validation.
   ambiguous, fixed in orchestrate 0.7.0; a pathspec bug in the scope check).
 - Full plug-in suite 505/505 in six shards; independent review FAIL then PASS.
 - Not yet covered: a live Claude Code host run of 1.3.0.
+
+## 1.3.1 shared-loop fixes (October 1, 2026)
+
+- Four defects from real 1.3.0 runs, each with a regression test seen failing
+  first: the step schema dropped fields the loop reads (every task BLOCKED "the
+  preparation named no worktree or starting commit"; `tests/workflow_harness.js`
+  now keeps only schema fields of a relay result, and `tests/test_workflows.py`
+  cross-checks the schemas against the shipped loop), a late commit-message
+  refusal that invalidated the run, a second commit failing on a path an earlier
+  commit deleted, and integration review args with the pre-refresh base.
+- Full plug-in suite 515/515 in six shards, tools suite 20/20, `make check`, all
+  for these four fixes (at ab25cdc); independent review PASS with each fix
+  reverted to confirm its test fails.
+- Two later fixes with regression tests, added in 75f9991: gates run with
+  `PYTHONDONTWRITEBYTECODE=1` so a passing Python gate no longer reports bytecode
+  as a worktree change, and `commit` refuses with `GIT_IDENTITY` before any state
+  change and records a failed commit as `integration_commit_failed`. They were not
+  in the October 1 review; the October 2 review of the whole fixes diff
+  (conformance and adversary PASS) covered them, confirmed the bytecode test fails
+  without its fix and reran the targeted tests (41 OK). The identity and
+  failed-commit tests pass but were not seen failing without their fixes, and the
+  full plug-in suite has not run since these two fixes. Open minor note: the
+  identity check also runs on an idempotent commit retry.
+- Prompt-audit edits to `SKILL.md`, `PROVENANCE.md` and the spec and product
+  internal guides: conformance review PASS (byte-identical to the approved diff),
+  bundle validation passes.
+- Review records renewed for all four sources at the unchanged pins (3e5886a,
+  c431b34, 40b0c1f, ebe92fb): the orchestrate record now covers all six fixes
+  above (four plus two later) and the prompt-audit edits; new factory
+  `1.3.1-shared-loop-fixes.json` and spec and product `1.3.1-prompt-audit.json`
+  records. `tools/upstreams.py status` reports
+  all four reviewed and `make check` passes.
+- Not yet covered: a full plug-in suite run with the two later fixes, and a live
+  Claude Code host run of 1.3.1.

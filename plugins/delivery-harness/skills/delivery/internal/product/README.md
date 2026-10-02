@@ -80,14 +80,3 @@ Markdown binding. It does not run from any product CRUD API. Its one-time
 revoked or malformed binding. Session summaries use the unchanged
 `product-session-binding/v1` metadata grammar in
 [references/artifacts.md](references/artifacts.md).
-
-## Provenance
-
-The Markdown model, templates, explicit selection and narrow ownership rules,
-native evidence helper, its 39 regression tests, and its references originate
-from `product-driven-development` version `0.5.0`. The helper and tests are
-vendored in this bundle; there is no runtime import from the old plugin or a
-developer-specific path. Relocation changes the helper path in the test and
-reference. A local fix rejects unsafe `sessions/` directories even when an exact
-binding is absent and a one-time unbound lookup was requested. The remaining
-public API and its tests are the delivery integration.

@@ -123,26 +123,3 @@ complete --root RUN/spec --verdict PASS
 If `init --intent-file` was used, it already entered `INTENT_CAPTURED`; start subsequent advances
 at `CONTEXT_DISCOVERY`. A later rebase uses `reopen-verify`, dispositions, `advance --to VERIFYING`,
 fresh verification evidence, and `complete`, without reapproving unchanged semantics.
-
-## Bundled material and provenance
-
-Vendored from the locally installed `spec-driven-development` plugin, version `1.0.0`, under its
-`skills/spec-driven-development/` directory:
-
-- `scripts/spec_flow.py` (source SHA-256 `59d34fc7700063099e577776120c9f5cf97eaaca6da517d7b87f6ffc7db5a05e`);
-- every file in `assets/`;
-- `references/artifact-contract.md`, `references/test-case-quality.md`, and `references/verification.md`;
-- `tests/test_spec_flow.py` (source SHA-256 `8314a91d7c6e87a16a2d04822f179e0d6a03c0110b4849942f29a7921e00bff0`)
-  and the `tests/fixtures/payment-retry/` package, now under this plugin's `tests/spec/`.
-
-Adaptations include relative bundle paths, canonical repository identity, strict fallback parsing,
-critical-area escalation, approval/scope/diff drift checks, execution authorization binding, rebase
-reverification, and focused adversarial/CLI regressions. The upstream skill entrypoint, host routing,
-workflow orchestration, evaluator scenarios, and packaging validator are intentionally not bundled.
-No license or notice file was present in the installed source bundle inspected for this copy.
-
-Run the engine suite from a temporary working directory with:
-
-```text
-PYTHONDONTWRITEBYTECODE=1 TMPDIR=/private/tmp python3 -m unittest discover -s <plugin>/tests/spec
-```

@@ -408,6 +408,19 @@ class GitSafetyTests(unittest.TestCase):
         self.assertEqual(result["files"], ["one.txt"])
         self.assertTrue(result["status"]["clean"])
 
+    def test_second_commit_after_a_committed_deletion_skips_the_absent_path(self):
+        root = self.task()
+        (root / "two.txt").unlink()
+        self.write(root, "one.txt", "first\n")
+        first = git.commit_changes(root, ["one.txt", "two.txt"], "Remove unused fixture file")
+        self.assertEqual(first["files"], ["one.txt", "two.txt"])
+        # The inventory against the base still names the deleted path on the next commit.
+        self.write(root, "one.txt", "second\n")
+        second = git.commit_changes(root, ["one.txt", "two.txt"], "Update fixture after review")
+        self.assertEqual(second["files"], ["one.txt"])
+        self.assertEqual(second["previous_head"], first["head"])
+        self.assertTrue(second["status"]["clean"])
+
     def test_cleanup_refuses_ignored_artifact_and_preserves_it(self):
         root = self.task()
         branch = git.inspect_repo(root)["branch"]

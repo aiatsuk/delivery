@@ -8,8 +8,8 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 
 | Source | Version inspected | What is retained |
 | --- | --- | --- |
-| spec-driven-development | 1.0.0 | Specification/check engine, templates, technical references and regressions; exact source hashes in its engine guide |
-| product-driven-development | 0.5.0 | Markdown model and bounded session evidence helper/tests; provenance in internal/product |
+| spec-driven-development | 1.0.0 | Specification/check engine, templates, technical references and regressions; exact source hashes below |
+| product-driven-development | 0.5.0 | Markdown model and bounded session evidence helper/tests; provenance below |
 | ai-factory | 1.0.1 | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
 | orchestrate | 0.7.0 (3e5886aba4d3f6b6b9bb9f8f056cdafc2be91400) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
@@ -24,6 +24,40 @@ The public spec/product/factory pins match the source skill trees previously use
 for the integration byte-for-byte. Orchestrate is selectively reviewed through
 0.7.0 as described below. Source pins alone do not replace runtime implementations
 or imply adoption of later upstream updates.
+
+## Specification engine bundle (spec-driven-development 1.0.0)
+
+Vendored from the locally installed `spec-driven-development` plugin, version `1.0.0`, under its
+`skills/spec-driven-development/` directory:
+
+- `scripts/spec_flow.py` (source SHA-256 `59d34fc7700063099e577776120c9f5cf97eaaca6da517d7b87f6ffc7db5a05e`);
+- every file in `assets/`;
+- `references/artifact-contract.md`, `references/test-case-quality.md`, and `references/verification.md`;
+- `tests/test_spec_flow.py` (source SHA-256 `8314a91d7c6e87a16a2d04822f179e0d6a03c0110b4849942f29a7921e00bff0`)
+  and the `tests/fixtures/payment-retry/` package, now under this plugin's `tests/spec/`.
+
+Adaptations include relative bundle paths, canonical repository identity, strict fallback parsing,
+critical-area escalation, approval/scope/diff drift checks, execution authorization binding, rebase
+reverification, and focused adversarial/CLI regressions. The upstream skill entrypoint, host routing,
+workflow orchestration, evaluator scenarios, and packaging validator are intentionally not bundled.
+No license or notice file was present in the installed source bundle inspected for this copy.
+
+Run the engine suite from a temporary working directory with:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 TMPDIR=/private/tmp python3 -m unittest discover -s <plugin>/tests/spec
+```
+
+## Product memory bundle (product-driven-development 0.5.0)
+
+The Markdown model, templates, explicit selection and narrow ownership rules,
+native evidence helper, its 39 regression tests, and its references originate
+from `product-driven-development` version `0.5.0`. The helper and tests are
+vendored in this bundle; there is no runtime import from the old plugin or a
+developer-specific path. Relocation changes the helper path in the test and
+reference. A local fix rejects unsafe `sessions/` directories even when an exact
+binding is absent and a one-time unbound lookup was requested. The remaining
+public API and its tests are the delivery integration.
 
 ## Explicit conflict resolutions
 

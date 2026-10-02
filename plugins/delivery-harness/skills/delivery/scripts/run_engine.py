@@ -188,6 +188,8 @@ def transaction(root: str | Path, event: str, expected_revision: int | None = No
         yield value
         value["revision"] += 1
         value["updated_at"] = now()
+        # A command that records a failure names it, so its history entry does not read as the success event.
+        event = value.pop("failed_event", None) or event
         value["history"].append({"revision": value["revision"], "at": value["updated_at"], "event": event, "state": value["state"]})
         atomic_json(root / "run.json", value)
 
@@ -1063,7 +1065,10 @@ def execute_gate(root, *, task_id: str | None = None, case_id: str | None = None
             output.write(f"Delivery gate attempt {attempt + 1}/{repeat}\n")
             output.flush()
             try:
-                process = subprocess.Popen(argv, cwd=owner["path"], stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                # Python bytecode is a side effect of the gate, not of the change: without it an untracked
+                # __pycache__/ in a repository that does not ignore it marks a passing gate as changing the worktree.
+                process = subprocess.Popen(argv, cwd=owner["path"], stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
                 try:
                     gate_jobs.set_process(process.pid)
                     remaining = max(0.01, timeout - (time.monotonic() - start))

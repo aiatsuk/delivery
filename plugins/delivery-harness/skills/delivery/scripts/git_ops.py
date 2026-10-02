@@ -768,6 +768,21 @@ def rebase_worktree(worktree: str | Path, remote: str = "origin", base: str = "m
     return result
 
 
+def check_message(message: str) -> None:
+    """Refuse a commit message that the commit itself would refuse; callers run it before any state change."""
+    if not isinstance(message, str) or not message.strip() or "\0" in message or _AGENT_NAME.search(message):
+        raise GitError("HISTORY_POLICY", "Use a nonempty English change description without agent attribution.")
+
+
+def check_identity(worktree: str | Path) -> None:
+    """Refuse when git cannot resolve the author or committer a commit in this worktree would record."""
+    root = _root(worktree)
+    for name in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        if _git(root, "var", name, check=False).returncode:
+            raise GitError("GIT_IDENTITY", "Git cannot resolve a commit author and committer here; set user.name and "
+                           "user.email in the repository configuration or the GIT_AUTHOR_* and GIT_COMMITTER_* variables.")
+
+
 def commit_changes(worktree: str | Path, paths: Iterable[str], message: str) -> dict:
     """Stage and commit only the declared files on a task branch.
 
@@ -777,8 +792,7 @@ def commit_changes(worktree: str | Path, paths: Iterable[str], message: str) -> 
     root = _task_root(worktree)
     _no_operations(root)
     allowed = _paths(root, paths)
-    if not isinstance(message, str) or not message.strip() or "\0" in message or _AGENT_NAME.search(message):
-        raise GitError("HISTORY_POLICY", "Use a nonempty English change description without agent attribution.")
+    check_message(message)
     state = _status(root)
     _visible(state)
     _scope(root, allowed, state)
@@ -799,9 +813,13 @@ def commit_changes(worktree: str | Path, paths: Iterable[str], message: str) -> 
     if staged["unstaged"] or staged["untracked"] or not staged["staged"]:
         raise GitError("WORKTREE_CHANGED", "Files changed while preparing the exact commit; inspect the index.")
     tree = _text(root, "write-tree")
+    # A declared path that an earlier commit already deleted is absent from HEAD,
+    # the index and the worktree, and git refuses it as a pathspec; pass only
+    # the declared paths whose staged state differs from HEAD.
+    changed = set(_diff_names(root, "HEAD", cached=True))
     # --only constrains the commit even if another process stages a different
     # file after our inventory check. Every path is passed after -- literally.
-    _git(root, "commit", "--only", "-m", message, "--", *allowed)
+    _git(root, "commit", "--only", "-m", message, "--", *[name for name in allowed if name in changed])
     head = _head(root)
     actual = _diff_names(root, previous, head)
     if set(actual) - set(allowed) or _text(root, "rev-parse", head + "^{tree}") != tree:

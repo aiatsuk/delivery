@@ -1,0 +1,36 @@
+{
+  "source_revision": "3e5886aba4d3f6b6b9bb9f8f056cdafc2be91400",
+  "disposition": "integrated",
+  "rationale": "Delivery 1.3.1 fixes defects of the 1.3.0 authority side of the shared loop found in real runs on September 28, 2026; the loop script stays byte for byte the pinned orchestrate 0.7.0 workflow. The step schema (args.schemas.step) now lists every field the loop reads off a recorded step, and the gate result rows list their fields, so relays returning structured output no longer drop the prepared worktree, dispatch, acceptance, review tokens or verdict. The integrated review args use the integration's base after refresh. Engine fixes outside the loop contract: commit checks the agent-name policy and git author/committer identity (GIT_IDENTITY) before any state change, a failed commit is recorded in the run history as integration_commit_failed instead of the success event, gates run with PYTHONDONTWRITEBYTECODE=1 so a passing Python gate no longer reports bytecode as a worktree change, and a second commit skips declared paths an earlier commit already deleted. The prompt-audit edits in mapped files change wording only: SKILL.md gains a short progress-update sentence and drops a repository-specific line, the 'no hidden tier pins' phrase and a maintainer-only compatibility claim; PROVENANCE.md now holds the spec-engine and product-memory vendoring notes moved from the internal guides. The loop contract and the orchestrate pin 3e5886a are unchanged.",
+  "reviewer": "Independent read-only review of the first four 1.3.1 fixes (step schema, early commit-message refusal, commit after deletion, refreshed review base) on October 1, 2026: PASS with no defects. It matched every field the loop reads against the shipped schemas, checked the commit path filter against staged deletions, renames and the --only and COMMIT_CHANGED guards, and reran each new test with its fix removed (all failed) and restored (all passed). The identity pre-check, failed-commit history event and bytecode-free gates were added later and were not part of that review. Review of the full fixes diff bf6d591..75f9991 on October 2, 2026 in the 1.4.0 release run (conformance and adversary lenses, both PASS): the staged tree matched 75f9991 exactly, the bytecode-free gate was checked red/green (removing PYTHONDONTWRITEBYTECODE makes test_python_gate_writes_no_bytecode_into_the_worktree fail), the identity pre-check and the integration_commit_failed history event were read against publisher.commit and run_engine.transaction, and the targeted tests reran OK (41 tests). It raised one minor note, not fixed in 1.3.1: check_identity also runs on an idempotent commit retry, so recovering an already-made commit needs a git identity too. The prompt-audit edits had a conformance review on October 2, 2026 in the same run: PASS, the staged change byte-identical to the approved proposed diff. Review prose does not authenticate identity.",
+  "tests": "First four fixes: regression tests written before each fix and seen failing without it, namely tests.test_workflows StepSchemaTests (schemas cross-checked against the shipped loop; the harness now keeps only the schema fields of a relay result, which made seven loop tests fail with 'the preparation named no worktree or starting commit'), tests.test_publisher test_commit_refuses_an_agent_name_before_any_state_change and test_integration_review_args_use_the_refreshed_base, and tests.test_git_ops test_second_commit_after_a_committed_deletion_skips_the_absent_path; then the full plug-in suite 515/515 in six shards, tools suite 20/20 and make check, all at ab25cdc, before the later fixes existed. Three later fixes, added with their tests in 75f9991: tests.test_run_engine test_python_gate_writes_no_bytecode_into_the_worktree, seen failing without its fix in the October 2 review, and tests.test_publisher test_commit_refuses_a_missing_git_identity_before_any_state_change and the integration_commit_failed history assertion, which pass but were not seen failing without their fixes in review. After 75f9991 only the targeted tests reran (41 OK in the October 2 review); the full plug-in suite has not run with the later fixes. Bundle validation after the prompt-audit edits; make check after this record. No live host run of 1.3.1 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/workflows/orchestrate-execute.js",
+    "skill/references/authority.md",
+    "skill/scripts/run_workflow.js",
+    "CHANGELOG.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/scripts/validate_bundle.py",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_steps.py",
+    "plugins/delivery-harness/skills/delivery/workflows/orchestrate-execute.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}
