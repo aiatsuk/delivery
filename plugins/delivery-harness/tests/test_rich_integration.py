@@ -333,6 +333,17 @@ class RichIntegrationTests(run_fixtures.RunFixture):
         self.assertEqual(revision, current["revision"])
         self.assertIsNone(current.get("rich_snapshot"))
 
+    def test_a_changed_gitlink_under_ignore_all_is_refused_before_any_snapshot(self):
+        _, second = self.add_submodule()
+        git(self.repo, "config", "submodule.vendor/lib.ignore", "all")
+        worktree = self.integrate_medium()
+        git(worktree, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
+        refused = self.cli("capture-verification", "--reason", "Capture with an ignored moved submodule", expected_code=2)
+        self.assertEqual("submodule_changed", refused["error"]["code"])
+        self.assertIn("vendor/lib", refused["error"]["message"])
+        snapshot_home = self.root / "spec-snapshots"
+        self.assertEqual([], list(snapshot_home.iterdir()) if snapshot_home.exists() else [])
+
     def test_medium_full_lifecycle_runs_authorized_rich_case_and_reaches_readiness(self):
         ready = self.medium_ready()
         self.assertEqual("READY_TO_PUBLISH", ready["state"])

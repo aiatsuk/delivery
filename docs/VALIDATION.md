@@ -171,5 +171,11 @@ real PR merge, deployment or production-side action is part of validation.
 - Tools tests 20/20 and the plug-in catalog 529/529 in eight shards (0 skipped,
   0 failures); `make check` passes with all four sources reviewed. Package export
   smoke, bundle validation and `delivery.py doctor` in the exported package pass.
-- Not yet covered: an independent review of the 1.4.0 changes and a live host run
-  of 1.4.0.
+- Independent read-only review of b277b27..8f615d1: PASS for the upstream diffs,
+  submodule handling (rename, type change, added gitlink, non-ASCII path), gate
+  timeouts (bad values refused; explicit > planned > 300), records, lock and
+  versions. Its one finding, a gitlink move hidden by `submodule.<name>.ignore=all`
+  from the early check, is fixed with `--ignore-submodules=none` and two tests seen
+  failing first. A separate error-path review found no defect.
+- Not yet covered: an independent re-review of that follow-up fix and a live host
+  run of 1.4.0.

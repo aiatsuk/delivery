@@ -82,6 +82,15 @@ class SnapshotTests(RunFixture):
         self.assertEqual([{"path": "vendor/lib", "before": first, "after": None}], snapshots.staged_gitlink_changes(str(self.repo), base))
 
 
+    def test_staged_gitlink_change_is_found_under_ignore_all(self):
+        first, second = self.gitlink()
+        (self.repo / ".gitmodules").write_text('[submodule "vendor/lib"]\n\tpath = vendor/lib\n\turl = ../library\n\tignore = all\n')
+        git(self.repo, "add", ".gitmodules")
+        git(self.repo, "commit", "-m", "Ignore the gitlink fixture in diffs")
+        base = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-index", "--cacheinfo", f"160000,{second},vendor/lib")
+        self.assertEqual([{"path": "vendor/lib", "before": first, "after": second}], snapshots.staged_gitlink_changes(str(self.repo), base))
+
     def test_existing_destination_refused(self):
         self.capture()
         with self.assertRaisesRegex(snapshots.git_ops.GitError, "immutable"):

@@ -15,7 +15,7 @@
         "plugins/delivery-harness/tests/test_run_engine.py": "dd6fb86e36eef4fad7393a40756dd96a255c611c984ea2453883472e631005bd"
       },
       "review_file": "docs/integrations/factory/1.4.0-sync.json",
-      "review_sha256": "5d90c58508d578404a3fe73cfc177d93f6486c771ebecd2bcc690bf8f80d37f9",
+      "review_sha256": "64fe47fb74d924e7a8eddf86c4c75c8d0f059b6eb330b2406fc99c77e5d84285",
       "reviewed_revision": "ba64c6220167364e4c1f8d209e9ed77f12f57968"
     },
     "orchestrate": {
@@ -45,7 +45,7 @@
         "plugins/delivery-harness/tests/workflow_harness.js": "a157411cb5ca81e001a764ff0507fc3641500e52023c84dca49778d514028769"
       },
       "review_file": "docs/integrations/orchestrate/0.7.1-sync.json",
-      "review_sha256": "9265467d171282e53ac0a7407ab1fa5690bc9508116526a9dafab0089429edbf",
+      "review_sha256": "7e7daa28afafcba13fbb66631684e77c75fde1ecb5471fb7e8408bf31727312e",
       "reviewed_revision": "6679439a44eb0b80fdbff59dfe995132ba44f9f9"
     },
     "product-driven-development": {
@@ -61,7 +61,7 @@
         "plugins/delivery-harness/tests/test_product.py": "28f92139c3b985e575ce473eb89679aef681b5164e05990c4c388709df863102"
       },
       "review_file": "docs/integrations/product-driven-development/1.4.0-sync.json",
-      "review_sha256": "377bfa225a2a0296a4c682aabfffff90a8b09bf2def082a1d001eacc04fd90e1",
+      "review_sha256": "40eb0bc72e1fe530eeee1d631f6a9fb73fab562901461964f31a9446349a2259",
       "reviewed_revision": "ebe92fbdda305fbf117badb16fecff233d5de287"
     },
     "spec-driven-development": {
@@ -97,14 +97,14 @@
         "plugins/delivery-harness/skills/delivery/internal/spec/references/verification.md": "a3a2ad75b9b01f6d0e39e25fd097d97640e5ebcb721513b130add5ff0e51f18f",
         "plugins/delivery-harness/skills/delivery/internal/spec/scripts/spec_flow.py": "ffee05aad2f7d6a492113206d4570a07c7ba491983e67c8bcdd319420a208d0a",
         "plugins/delivery-harness/skills/delivery/scripts/run_engine.py": "130fc625fb6ccbc981166da42125e6d21d4289143660d86a4c192a113633555a",
-        "plugins/delivery-harness/skills/delivery/scripts/snapshots.py": "00680e4bec6fd53184fb722b6a779ecb7232206bf78d8a771eef17f1c6436c5a",
+        "plugins/delivery-harness/skills/delivery/scripts/snapshots.py": "d8a0cccc2ba01a9cc5a5672a008a55c3770ce0bb201a2c39619fd0b360be14b9",
         "plugins/delivery-harness/tests/spec/test_delivery_spec_regressions.py": "ab47e2035306291c0ef826a2b6251458384e9da31699338f94fb61e4ca98807c",
         "plugins/delivery-harness/tests/spec/test_spec_flow.py": "ac988a7966fedfd0db06b70bee9ac2c603f653764d7c3ea2ebaa04ae3eff73b1",
-        "plugins/delivery-harness/tests/test_rich_integration.py": "1eb8c59c6afcd29d77007594a12d4d4fc41ef4e8f3c66d4d13510bc48c7b4fa0",
-        "plugins/delivery-harness/tests/test_snapshots.py": "c5fa964580e778043ff32d0b5a7eb405a856002e13d8ed506567e642de26c65d"
+        "plugins/delivery-harness/tests/test_rich_integration.py": "0a92001a2dc7bef9f8e6ae1c754f8d880374b64c67a73f268d0619b676604473",
+        "plugins/delivery-harness/tests/test_snapshots.py": "c3791c6bf245a7f30507090049e799aa7715374efbd117a90b55aa5eeaf6e024"
       },
       "review_file": "docs/integrations/spec-driven-development/1.4.0-sync.json",
-      "review_sha256": "61b631ebc3b8752be688d09615817e3877f2a615d236ec17acb3442784243e73",
+      "review_sha256": "3a7717b6da93d1caff8f4c76dbf1c44179465eb755d5dacb42f59d42a07e8c01",
       "reviewed_revision": "e9c04b6ce01e855f808af3faadfc1cb36776270a"
     }
   }
