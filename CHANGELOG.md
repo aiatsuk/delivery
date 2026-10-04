@@ -14,9 +14,13 @@ A new loop contract: an interrupted task resumes at the gate.
   the gates on the current content, then review, rework and finish as usual,
   without a new dispatch or implementer. `prepare` changes nothing in the run.
 - `prepare` still refuses, with the way out in its message: a REPORTED task whose
-  worktree changed since its report or whose content has an unanswered FAIL
-  (`task-rework`), any task while the run is blocked or no longer in unintegrated
-  implementation, a DISPATCHED task (wait, then `task-import` or `task-abandon`)
+  worktree changed since its report or whose content has an unanswered FAIL,
+  also one returned to the host journal but not yet harvested (`task-rework`);
+  a REPORTED task while the review harvest cannot read every journal
+  (`harvest_incomplete` with the unreadable paths);
+  a REPORTED task whose worktree is gone or whose HEAD or branch moved; any task
+  while the run is blocked or no longer in unintegrated implementation; a
+  DISPATCHED task (wait, then `task-import` or `task-abandon`)
   and a VERIFIED task. The step schema lists `resume_at`.
 - End-to-end cleanup tests: `cleanup` on a merged run whose repository has an
   uninitialized submodule removes the task worktree (receipt `removed: true`),

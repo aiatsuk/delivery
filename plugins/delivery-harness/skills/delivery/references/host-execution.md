@@ -133,10 +133,14 @@ session or loop stopped, even after its gates ran) at the gate: `prepare` return
 review, rework and finish steps as usual, without a new dispatch or implementer. The
 reviewers of that round see no implementer claims and verify the staged diff alone.
 `prepare` still refuses, without changing the run, a REPORTED task whose worktree
-changed since its report or whose content carries an unanswered FAIL (send it back
-with `task-rework`), any task while the run is blocked or no longer in unintegrated
-implementation, a DISPATCHED task (wait for its implementer, then `task-import` or
-`task-abandon`), and a VERIFIED task (nothing to resume). The Codex
+changed since its report or whose content carries an unanswered FAIL, harvested or
+still only in a host journal (send it back with `task-rework`), a REPORTED task while
+the review harvest is incomplete (`harvest_incomplete`, naming the unreadable paths;
+restore read access), a REPORTED task whose worktree is gone or whose HEAD or branch
+moved, any task while the run is blocked or
+no longer in unintegrated implementation, a DISPATCHED task (wait for its
+implementer, then `task-import` or `task-abandon`), and a VERIFIED task (nothing to
+resume). The Codex
 runner of orchestrate refuses these arguments (it writes no host journal); on
 Codex use the native-agent path below.
 
