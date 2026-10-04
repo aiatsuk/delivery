@@ -70,7 +70,8 @@ another version; refresh the saved copy after an update.
    engine's report and verdict schemas. `--integration` instead targets the
    integration worktree after `integrate` and the integrated gates.
 2. The loop runs each task in dependency order. It calls `workflow_steps.py`, which
-   runs ordinary engine commands, through relay agents: `prepare` (`task-prepare`),
+   runs ordinary engine commands, through relay agents: `prepare` (`task-prepare`, or
+   `resume_at: "gate"` for a REPORTED task, described below),
    `dispatch` (`task-register --via-workflow`), the implementer (labels `impl:T:L0`,
    `rework:T:L0r<n>`; its report carries the dispatch ID and the staged tree),
    `collect` (`task-import`; a missing, malformed, out-of-scope or tree-mismatched
@@ -125,7 +126,17 @@ another version; refresh the saved copy after an update.
 
 The engine commands stay available for recovery: after a loop ends, `status` shows
 where each task stands, and the coordinator continues with the same commands (or a
-new loop for the remaining tasks) instead of repeating recorded steps. The Codex
+new loop for the remaining tasks) instead of repeating recorded steps. A new loop
+resumes a REPORTED task (its implementer's result was imported, then the host
+session or loop stopped, even after its gates ran) at the gate: `prepare` returns
+`resume_at: "gate"`, and the loop reruns the gates on the current content, then the
+review, rework and finish steps as usual, without a new dispatch or implementer. The
+reviewers of that round see no implementer claims and verify the staged diff alone.
+`prepare` still refuses, without changing the run, a REPORTED task whose worktree
+changed since its report or whose content carries an unanswered FAIL (send it back
+with `task-rework`), any task while the run is blocked or no longer in unintegrated
+implementation, a DISPATCHED task (wait for its implementer, then `task-import` or
+`task-abandon`), and a VERIFIED task (nothing to resume). The Codex
 runner of orchestrate refuses these arguments (it writes no host journal); on
 Codex use the native-agent path below.
 

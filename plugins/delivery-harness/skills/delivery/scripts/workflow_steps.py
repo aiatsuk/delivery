@@ -94,14 +94,15 @@ FINISH = {
 }
 # One shape for every recorded step; a relay returns structured output against it and drops any field
 # it does not list, so it names every field the loop reads off a step (prepare, dispatch, collect,
-# review-open, review-close). tests/test_workflows.py checks it against the shipped loop.
+# review-open, review-close). tests/test_workflows.py checks it against the shipped loop. prepare sets
+# resume_at "gate" only for a task the engine holds as REPORTED (step_prepare); otherwise it is absent.
 STEP = {
     "type": "object",
     "properties": {"exit_code": {"type": "integer"}, "output": {"type": "string"}, "blocked": {"type": "string"},
                    "worktree": {"type": "string"}, "branch": {"type": "string"}, "head": {"type": "string"},
                    "worktree_id": {"type": "string"}, "spec_sha256": {"type": "string"}, "dispatch": {"type": "string"},
                    "accepted": {"type": "boolean"}, "tokens": {"type": "object", "additionalProperties": {"type": "string"}},
-                   "verdict": {"type": "string"}},
+                   "verdict": {"type": "string"}, "resume_at": {"type": "string", "enum": ["gate"]}},
     "required": ["exit_code", "output"],
 }
 
@@ -211,12 +212,58 @@ def step_prepare(a) -> dict:
         if not ok:
             return {"exit_code": 1, "output": refusal(result), **({"blocked": blocker(a.run)} if blocker(a.run) else {})}
         owner = result["tasks"][a.task]
+    elif owner["status"] == "REPORTED":
+        return resume_reported(a, owner)
     elif owner["status"] not in {"PREPARED", "REWORK"}:
         # A task the engine already holds in another state belongs to the coordinator, not to a fresh loop.
-        return {"exit_code": 1, "output": f"task {a.task} is {owner['status']}; resume it from status instead of a new loop"}
+        return {"exit_code": 1, "output": NOT_RESUMABLE.get(owner["status"], f"task {a.task} is {owner['status']}; continue it from status instead of a new loop").format(task=a.task)}
+    return prepared(a, owner)
+
+
+def prepared(a, owner: dict, **extra) -> dict:
     contract = Path(a.run) / "tasks" / f"{a.task}.json"
     return {"exit_code": 0, "output": f"prepared attempt {owner['attempt']}", "worktree": owner["path"], "branch": owner["branch"],
-            "head": owner["base_sha"], "spec_sha256": hashlib.sha256(contract.read_bytes()).hexdigest()}
+            "head": owner["base_sha"], "spec_sha256": hashlib.sha256(contract.read_bytes()).hexdigest(), **extra}
+
+
+NOT_RESUMABLE = {
+    "DISPATCHED": ("task {task} is DISPATCHED: its implementer may still be running. Wait for it, then collect its result with "
+                   "task-import (the task becomes REPORTED and a new loop resumes it at the gate) or end the dispatch with "
+                   "task-abandon; a new loop never starts a second implementer on the same task"),
+    "VERIFIED": "task {task} is already VERIFIED with a reviewed patch; there is nothing to resume (status shows the next step)",
+}
+
+
+def resume_reported(a, owner: dict) -> dict:
+    """A REPORTED task (its implementer's result was imported, then the loop stopped) resumes at the gate.
+
+    Read-only: the gates rerun on the current content and the review follows as in a normal round. A
+    task whose content no longer matches its report, or whose current content already carries an
+    unanswered FAIL, would only fail later, so it is refused here with the way out.
+    """
+    reason = blocker(a.run)
+    if reason:
+        return {"exit_code": 1, "output": f"task {a.task} is REPORTED but the run is blocked", "blocked": reason}
+    import run_engine
+    import git_ops
+    try:
+        run = run_engine.load(a.run)
+        if run["state"] != "IMPLEMENTING" or run.get("integration"):
+            return {"exit_code": 1, "output": f"task {a.task} is REPORTED but the run is {run['state']}"
+                    f"{' and integrated' if run.get('integration') else ''}; a loop resumes only active, unintegrated implementation"}
+        held = run["tasks"][a.task]
+        snap = run_engine.snapshot(run, a.task)
+        if not held.get("report") or not run_engine.evidence_current(held["report"], snap):
+            return {"exit_code": 1, "output": f"task {a.task} is REPORTED but its worktree changed since its report; send it back with "
+                    "task-rework (a new dispatch reports the current content) instead of resuming at the gate"}
+        failures = run_engine._unoverridden_failures(run, a.task, snap)
+        if failures:
+            return {"exit_code": 1, "output": f"task {a.task} is REPORTED but its current content has an unanswered FAIL review from "
+                    f"{failures[0].get('actor', 'a reviewer')}; send it back with task-rework, or record authorize --scope decision "
+                    f"--code review_override --task {a.task} after that FAIL"}
+    except (run_engine.RunError, git_ops.GitError) as exc:
+        return {"exit_code": 1, "output": f"task {a.task} is REPORTED but cannot resume: {getattr(exc, 'code', 'error')}: {exc}"}
+    return prepared(a, owner, output=f"resuming attempt {owner['attempt']} at the gate with its imported report", resume_at="gate")
 
 
 def step_dispatch(a) -> dict:
