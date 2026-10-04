@@ -24,7 +24,7 @@ export const meta = {
 
 // Kept equal to the skill version by tests/test_version.py; a saved copy that install.sh did not
 // refresh refuses args produced by another version of plan.py.
-const SCRIPT_VERSION = '0.7.1'
+const SCRIPT_VERSION = '0.8.0'
 
 const A = args
 if (!A || typeof A !== 'object' || !Array.isArray(A.tasks) || !A.schemas || !(A.scripts || A.authority)) {
@@ -386,6 +386,13 @@ async function runGoverned(t, dependencies) {
   if (!prep) return outcome('BLOCKED', 'the preparing agent returned no result')
   if (blockedBy(prep) || prep.exit_code !== 0) return outcome('BLOCKED', `the authority did not prepare the task: ${blockedBy(prep) || prep.output}`)
   if (!prep.worktree || !prep.head) return outcome('BLOCKED', 'the preparation named no worktree or starting commit')
+  // resume_at "gate": the authority already holds an accepted result for this task (an implementer
+  // reported before the loop stopped), so the first round starts at the gate instead of a new dispatch.
+  // Only a missing field or null means "no resume"; any other value, the empty string included, blocks.
+  const resume = prep.resume_at === undefined || prep.resume_at === null ? null : prep.resume_at
+  if (resume !== null && resume !== 'gate') {
+    return outcome('BLOCKED', `the preparation asked to resume at ${JSON.stringify(resume)}; the loop resumes only at "gate"`)
+  }
   // The authority creates the worktree, so its location and starting commit come from the preparation.
   const w = { ...t, worktree: prep.worktree, branch: prep.branch || t.branch, start_head: prep.head,
     worktree_id: prep.worktree_id || t.worktree_id, spec_sha256: prep.spec_sha256 || t.spec_sha256 }
@@ -396,20 +403,25 @@ async function runGoverned(t, dependencies) {
   let defects = []
   let previous = null
   for (let round = 0; ; round++) {
-    const reg = await record('dispatch', task, `dispatch:${t.id}:r${round}`)
-    if (!reg) return outcome('BLOCKED', 'the dispatch agent returned no result', { history })
-    if (blockedBy(reg) || reg.exit_code !== 0 || !reg.dispatch) {
-      return outcome('BLOCKED', `the authority refused the dispatch: ${blockedBy(reg) || reg.output}`, { history })
+    // A resumed task has no report in this run; reviewers then verify the staged diff without claims.
+    const resumed = round === 0 && resume === 'gate'
+    let got = { accepted: true }
+    if (!resumed) {
+      const reg = await record('dispatch', task, `dispatch:${t.id}:r${round}`)
+      if (!reg) return outcome('BLOCKED', 'the dispatch agent returned no result', { history })
+      if (blockedBy(reg) || reg.exit_code !== 0 || !reg.dispatch) {
+        return outcome('BLOCKED', `the authority refused the dispatch: ${blockedBy(reg) || reg.output}`, { history })
+      }
+      report = round === 0
+        ? await agent(implementPrompt(w, step, [], reg.dispatch), {
+          label: `impl:${t.id}:L0`, phase: 'Implement', ...typeOf('implementer'), ...pick(step), schema: A.schemas.report })
+        : await agent(reworkPrompt(w, step, report, gate, defects, round, reg.dispatch), {
+          label: `rework:${t.id}:L0r${round}`, phase: 'Implement', ...typeOf('implementer'), ...pick(step), schema: A.schemas.report })
+      // The authority reads the implementer's result from the host journal, never from this script.
+      got = await record('collect', task, `collect:${t.id}:r${round}`)
+      if (!got) return outcome('BLOCKED', 'the collecting agent returned no result', { history })
+      if (blockedBy(got)) return outcome('BLOCKED', blockedBy(got), { history })
     }
-    report = round === 0
-      ? await agent(implementPrompt(w, step, [], reg.dispatch), {
-        label: `impl:${t.id}:L0`, phase: 'Implement', ...typeOf('implementer'), ...pick(step), schema: A.schemas.report })
-      : await agent(reworkPrompt(w, step, report, gate, defects, round, reg.dispatch), {
-        label: `rework:${t.id}:L0r${round}`, phase: 'Implement', ...typeOf('implementer'), ...pick(step), schema: A.schemas.report })
-    // The authority reads the implementer's result from the host journal, never from this script.
-    const got = await record('collect', task, `collect:${t.id}:r${round}`)
-    if (!got) return outcome('BLOCKED', 'the collecting agent returned no result', { history })
-    if (blockedBy(got)) return outcome('BLOCKED', blockedBy(got), { history })
     let reviews = []
     gate = null
     if (!got.accepted) {

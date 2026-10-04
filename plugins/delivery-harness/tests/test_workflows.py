@@ -165,6 +165,87 @@ class LoopTests(RunFixture):
         review = e.load(self.root)["reviews"][-1]
         self.assertEqual((None, "PASS"), (review["task"], review["verdict"]))
 
+    # ---- resuming a task the engine already holds
+
+    def interrupted(self, content="after\n"):
+        """A loop whose host session stopped after the implementer's result was imported: the engine holds REPORTED."""
+        self.begin()
+        out = self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": content}}], "gate:value:L0r0": [None]})
+        self.assertEqual("BLOCKED", self.result(out)["status"])
+        self.assertEqual(["prepare:value", "dispatch:value:r0", "impl:value:L0", "collect:value:r0", "gate:value:L0r0"], self.labels(out))
+        owner = e.load(self.root)["tasks"]["value"]
+        self.assertEqual("REPORTED", owner["status"])
+        return owner
+
+    def refused(self, *words):
+        before = e.load(self.root)["revision"]
+        prep = self.steps("prepare", "--task", "value")
+        self.assertEqual(1, prep["exit_code"], prep)
+        self.assertNotIn("resume_at", prep)
+        for word in words:
+            self.assertIn(word, prep["output"] + prep.get("blocked", ""))
+        self.assertEqual(before, e.load(self.root)["revision"])
+        out = self.loop(self.steps("args", "--task", "value"), run_id="wf_loop-0009")
+        self.assertEqual(["prepare:value"], self.labels(out))
+        self.assertEqual("BLOCKED", self.result(out)["status"])
+        return prep
+
+    def test_a_reported_task_resumes_at_the_gate_without_a_new_dispatch(self):
+        before = self.interrupted()
+        revision = e.load(self.root)["revision"]
+        prep = self.steps("prepare", "--task", "value")
+        self.assertEqual((0, "gate", before["path"], before["base_sha"]), (prep["exit_code"], prep["resume_at"], prep["worktree"], prep["head"]))
+        self.assertEqual(revision, e.load(self.root)["revision"], "preparing a resume must not change the run")
+        out = self.loop(self.steps("args"), run_id="wf_loop-0002")
+        self.assertEqual(["prepare:value", "gate:value:L0r0", "review-open:value:r0", "review:value:r0:conformance",
+                          "review-close:value:r0", "finish:value"], self.labels(out))
+        result = self.result(out)
+        self.assertEqual(("PASS", 0), (result["status"], result["rounds"]), result.get("reason"))
+        run = e.load(self.root)
+        owner = run["tasks"]["value"]
+        self.assertEqual("VERIFIED", owner["status"])
+        self.assertEqual((before["agent"], before["dispatches"], before["report"]["dispatch_id"]),
+                         (owner["agent"], owner["dispatches"], owner["report"]["dispatch_id"]))
+        self.assertTrue(owner["agent"]["actor"].startswith("workflow-agent:wf_loop-0001/"))
+        self.assertEqual(result["patch"], owner["patch"]["path"])
+        review = run["reviews"][-1]
+        self.assertEqual(("PASS", "workflow-journal"), (review["verdict"], review["source"]))
+        self.assertTrue(all(reviewer.startswith("workflow-agent:wf_loop-0002/") for reviewer in review["reviewers"]), review["reviewers"])
+
+    def test_a_resumed_task_with_a_red_gate_is_reworked_through_a_new_dispatch(self):
+        self.interrupted("wrong\n")
+        out = self.loop(self.steps("args"), {"rework:value:L0r1": [{"write": {"value.txt": "after\n"}}]}, run_id="wf_loop-0002")
+        self.assertEqual(["prepare:value", "gate:value:L0r0", "return:value:r0", "dispatch:value:r1", "rework:value:L0r1", "collect:value:r1"],
+                         self.labels(out)[:6])
+        self.assertNotIn("impl:value:L0", self.labels(out))
+        self.assertEqual("PASS", self.result(out)["status"], self.result(out).get("reason"))
+        owner = e.load(self.root)["tasks"]["value"]
+        self.assertEqual((1, "VERIFIED"), (owner["rework_rounds"], owner["status"]))
+
+    def test_a_reported_task_changed_after_its_report_is_refused(self):
+        owner = self.interrupted()
+        (Path(owner["path"]) / "value.txt").write_text("edited by hand\n")
+        git(Path(owner["path"]), "add", "value.txt")
+        self.refused("REPORTED", "changed since")
+
+    def test_a_reported_task_in_a_blocked_run_is_refused(self):
+        self.interrupted()
+        e.block(self.root, "Synthetic fixture blocker.")
+        prep = self.refused("Synthetic fixture blocker")
+        self.assertIn("blocked", prep)
+
+    def test_a_dispatched_task_is_refused_until_its_result_is_collected(self):
+        self.begin()
+        self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": "after\n"}}], "collect:value:r0": [None]})
+        self.assertEqual("DISPATCHED", e.load(self.root)["tasks"]["value"]["status"])
+        self.refused("DISPATCHED", "task-import", "task-abandon")
+
+    def test_a_verified_task_is_refused(self):
+        self.begin()
+        self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": "after\n"}}]})
+        self.assertEqual("VERIFIED", e.load(self.root)["tasks"]["value"]["status"])
+        self.refused("VERIFIED")
+
 
 class StepSchemaTests(unittest.TestCase):
     """A relay returns structured output against its schema, so every field the loop reads must be listed."""
@@ -190,10 +271,10 @@ class StepSchemaTests(unittest.TestCase):
 
     def test_every_field_the_loop_reads_from_a_recorded_step_is_in_the_step_schema(self):
         authority = self.source[self.source.index("function record("):]
-        names = set(re.findall(r"const (\w+) = await record\(", authority))
+        names = set(re.findall(r"(?:const |let )?\b(\w+) = await record\(", authority))
         self.assertTrue({"prep", "reg", "got", "back", "open", "close"} <= names, names)
         fields = self.reads(names, authority)
-        self.assertTrue({"worktree", "head", "branch", "spec_sha256", "dispatch", "accepted", "tokens", "verdict"} <= fields, fields)
+        self.assertTrue({"worktree", "head", "branch", "spec_sha256", "dispatch", "accepted", "tokens", "verdict", "resume_at"} <= fields, fields)
         self.assert_listed(self.steps.STEP, fields)
 
     def test_every_field_the_loop_reads_from_a_gate_or_finish_is_in_its_schema(self):
@@ -261,6 +342,19 @@ class StepClassificationTests(unittest.TestCase):
         with mock.patch.object(self.steps, "delivery", side_effect=fake), mock.patch.object(self.steps, "blocker", return_value=""):
             out = self.steps.step_collect(self.args)
         self.assertEqual((["task-import", "task-abandon"], False, None), (calls, out["accepted"], out.get("blocked")))
+
+    def test_a_reported_task_with_an_unanswered_fail_on_its_content_is_not_resumed(self):
+        import run_engine
+        run = {"state": "IMPLEMENTING", "integration": None, "tasks": {"value": {"status": "REPORTED", "path": "/wt", "branch": "b", "base_sha": "s",
+                                                                                 "attempt": 1, "report": {"snapshot": {}}}}}
+        with mock.patch.object(self.steps, "run_state", return_value=run), mock.patch.object(run_engine, "load", return_value=run), \
+                mock.patch.object(run_engine, "snapshot", return_value={"content": "c", "base_sha": "s"}), \
+                mock.patch.object(run_engine, "evidence_current", return_value=True), \
+                mock.patch.object(run_engine, "_unoverridden_failures", return_value=[{"actor": "workflow-agent:wf_x/a1"}]):
+            out = self.steps.step_prepare(self.args)
+        self.assertEqual(1, out["exit_code"])
+        self.assertNotIn("resume_at", out)
+        self.assertIn("FAIL", out["output"])
 
     def test_an_unexpected_error_prints_an_object_every_step_schema_accepts(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stdout") as stdout:
