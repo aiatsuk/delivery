@@ -715,5 +715,51 @@ class SubmoduleArtifactTests(unittest.TestCase):
         self.assertEqual(["vendor/lib/"], self.blockers())
 
 
+class SubmoduleCleanupTests(PublisherFixture):
+    """End to end: the real cleanup command on a merged run whose repository has an uninitialized submodule."""
+
+    def setUp(self):
+        super().setUp()
+        library = self.home / "library"
+        git(self.home, "init", "--initial-branch=main", str(library))
+        (library / "README.txt").write_text("library\n")
+        git(library, "add", "--", "README.txt")
+        git(library, "commit", "-m", "Create library")
+        git(self.repo, "-c", "protocol.file.allow=always", "submodule", "add", "--", str(library), "vendor/lib")
+        git(self.repo, "commit", "-m", "Add library submodule")
+        git(self.repo, "push", "origin", "main")
+        self.original = git(self.repo, "rev-parse", "HEAD")
+
+    def merged_with_placeholder(self):
+        merged = self.merged()
+        task = Path(merged["tasks"]["value"]["path"])
+        # The task tree has the empty directory Git leaves for a submodule that was never initialized.
+        self.assertEqual("160000", git(task, "ls-files", "--stage", "--", "vendor/lib").split()[0])
+        self.assertEqual([], list((task / "vendor/lib").iterdir()))
+        return merged, task
+
+    def test_cleanup_removes_a_task_tree_whose_only_extra_entry_is_the_submodule_placeholder(self):
+        merged, task = self.merged_with_placeholder()
+        result = p.cleanup(self.root, provider=self.provider)
+        self.assertEqual("COMPLETE", result["state"])
+        receipt = result["cleanup"]["worktrees"]["value"]
+        self.assertEqual((True, True), (receipt["removed"], receipt["branch_preserved"]))
+        self.assertFalse(task.exists())
+        self.assertTrue(result["cleanup"]["worktrees"]["integration"]["removed"])
+        self.assertFalse(Path(merged["integration"]["path"]).exists())
+        self.assertEqual(receipt["head"], git(self.repo, "rev-parse", "refs/heads/" + merged["tasks"]["value"]["branch"]))
+
+    def test_cleanup_still_refuses_a_stray_empty_directory_next_to_the_placeholder(self):
+        merged, task = self.merged_with_placeholder()
+        (task / "vendor/empty").mkdir()
+        self.assert_code("cleanup_artifacts", p.cleanup, self.root, provider=self.provider)
+        self.assertTrue((task / "vendor/empty").is_dir())
+        self.assertEqual("MERGED", e.load(self.root)["state"])
+        (task / "vendor/empty").rmdir()
+        result = p.cleanup(self.root, provider=self.provider)
+        self.assertEqual(("COMPLETE", True), (result["state"], result["cleanup"]["worktrees"]["value"]["removed"]))
+        self.assertFalse(task.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
