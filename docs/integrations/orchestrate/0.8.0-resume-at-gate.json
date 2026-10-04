@@ -1,0 +1,41 @@
+{
+  "source_revision": "e4d73a7f97082cb1a2585208ff3db1f9d4b0d130",
+  "disposition": "integrated",
+  "rationale": "Orchestrate 0.8.0 (e4d73a7, tag v0.8.0) adds resume_at \"gate\" to an external authority's prepare result (skill/references/authority.md, Resuming at the gate): the loop skips dispatch, implementer and collect in the first round and starts at the gate; null or absent changes nothing; any other value blocks. workflows/orchestrate-execute.js is replaced by the upstream file byte for byte (SCRIPT_VERSION 0.8.0). workflow_steps.py prepare returns resume_at \"gate\" for a task the engine holds as REPORTED after read-only checks (run unblocked, IMPLEMENTING and unintegrated; worktree matches the imported report; no unanswered FAIL on the content) and still refuses DISPATCHED, VERIFIED and every other held state with the way out; the STEP schema lists resume_at. host-execution.md documents the resume and its refusals; PROVENANCE.md and README.md name 0.8.0. tests/test_workflows.py adds loop tests through tests/workflow_harness.js (unchanged) and widens the schema test to the loop's let-declared collect result. tests/test_publisher.py adds end-to-end cleanup tests for an uninitialized submodule and is now mapped here, since it covers the orchestrate-derived conservative worktree cleanup in git_ops.py. Not applicable: upstream release tooling (scripts/release.py, release.yml, Makefile, AGENTS.md) and its tests; this repository has its own release check. The upstream SKILL.md change is its version only.",
+  "reviewer": "Independent read-only reviewer agent (did not write the change) on October 4, 2026, reviewing the uncommitted 1.5.0 diff: PASS, no blocking defects. It confirmed the gitlink at e4d73a7 (git describe v0.8.0) and cmp exit 0 for the shipped loop; that resume_reported only reads (run_state, blocker, run_engine.load, snapshot, evidence_current, _unoverridden_failures; no transaction or harvest); that the resumed path keeps the engine invariants (gate and review-token accept REPORTED in unintegrated IMPLEMENTING; task-rework accepts REPORTED; the earlier implementer stays excluded as a reviewer; harvested and late FAILs fail closed; stale_report is checked up front and again at review import); that every task status is handled (PREPARED/REWORK prepared, missing/INVALIDATED via task-prepare, REPORTED resumed after checks, DISPATCHED and VERIFIED refused with their way out); and that RunError/GitError are caught in the function while KeyError/OSError/ValueError reach main's JSON error object. Notes, not defects: test_a_verified_task_is_refused also passes on the old code (a guard only); SubmoduleCleanupTests cover the 1.4.1 fix and add no code; a REPORTED task in a non-IMPLEMENTING or integrated run and a real harvested FAIL blocking a resume are refused by code but not tested end to end; the upstream loop gives resumed reviewers no report text. Review prose does not authenticate identity.",
+  "tests": "Resume regressions written first and seen failing on October 4, 2026, after the loop sync and before the workflow_steps.py change: 15 targeted tests, failures=6 errors=1 (resume_at KeyError; STEP schema missing resume_at; refusals without the blocker, 'changed since', 'task-import' or 'FAIL' text); green after the change (tests.test_workflows, 25 tests OK). SubmoduleCleanupTests (tests.test_publisher) pass, and fail with cleanup_artifacts (errors=2) when git_ops.py is temporarily restored to its pre-1.4.1 version (04a81d0). Full suite before this record: tools tests 33 OK; plug-in catalog 547 executed, 0 skipped, 0 failures. The reviewer independently reran tests.test_workflows and SubmoduleCleanupTests (27 OK) and release.py check --tag v1.5.0 (exit 0). make check after this record. No live host run of 1.5.0 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/workflows/orchestrate-execute.js",
+    "skill/references/authority.md",
+    "skill/SKILL.md",
+    "tests/test_workflow_authority.py",
+    "tests/workflow_harness.js",
+    "CHANGELOG.md",
+    "VERSION"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/scripts/validate_bundle.py",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_steps.py",
+    "plugins/delivery-harness/skills/delivery/workflows/orchestrate-execute.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_publisher.py",
+    "plugins/delivery-harness/tests/test_run_engine.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}

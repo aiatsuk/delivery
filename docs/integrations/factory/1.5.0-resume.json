@@ -1,0 +1,22 @@
+{
+  "source_revision": "ba64c6220167364e4c1f8d209e9ed77f12f57968",
+  "disposition": "integrated",
+  "rationale": "Same pin (AI Factory 1.0.2 at ba64c62), no upstream change. Mapped files changed in 1.5.0: host-execution.md documents the loop's resume of a REPORTED task at the gate and its refusals, and PROVENANCE.md adds the 1.5.0 section and the orchestrate 0.8.0 row. The factory-derived rules are unchanged: the finding decision catalogue, bounded rework and support rounds, non-convergence blocking and gate triage still apply, since a resumed task reruns its gates and review and any rework goes through the same engine budget.",
+  "reviewer": "Independent read-only reviewer agent (did not write the change) on October 4, 2026, reviewing the uncommitted 1.5.0 diff: PASS, no blocking defects. It confirmed the gitlink at e4d73a7 (git describe v0.8.0) and cmp exit 0 for the shipped loop; that resume_reported only reads (run_state, blocker, run_engine.load, snapshot, evidence_current, _unoverridden_failures; no transaction or harvest); that the resumed path keeps the engine invariants (gate and review-token accept REPORTED in unintegrated IMPLEMENTING; task-rework accepts REPORTED; the earlier implementer stays excluded as a reviewer; harvested and late FAILs fail closed; stale_report is checked up front and again at review import); that every task status is handled (PREPARED/REWORK prepared, missing/INVALIDATED via task-prepare, REPORTED resumed after checks, DISPATCHED and VERIFIED refused with their way out); and that RunError/GitError are caught in the function while KeyError/OSError/ValueError reach main's JSON error object. Notes, not defects: test_a_verified_task_is_refused also passes on the old code (a guard only); SubmoduleCleanupTests cover the 1.4.1 fix and add no code; a REPORTED task in a non-IMPLEMENTING or integrated run and a real harvested FAIL blocking a resume are refused by code but not tested end to end; the upstream loop gives resumed reviewers no report text. Review prose does not authenticate identity.",
+  "tests": "Resume regressions written first and seen failing on October 4, 2026, after the loop sync and before the workflow_steps.py change: 15 targeted tests, failures=6 errors=1 (resume_at KeyError; STEP schema missing resume_at; refusals without the blocker, 'changed since', 'task-import' or 'FAIL' text); green after the change (tests.test_workflows, 25 tests OK). SubmoduleCleanupTests (tests.test_publisher) pass, and fail with cleanup_artifacts (errors=2) when git_ops.py is temporarily restored to its pre-1.4.1 version (04a81d0). Full suite before this record: tools tests 33 OK; plug-in catalog 547 executed, 0 skipped, 0 failures. The reviewer independently reran tests.test_workflows and SubmoduleCleanupTests (27 OK) and release.py check --tag v1.5.0 (exit 0). make check after this record. No live host run of 1.5.0 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/factory-small/SKILL.md",
+    "skills/factory-gates/SKILL.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py",
+    "plugins/delivery-harness/tests/test_run_engine.py"
+  ]
+}

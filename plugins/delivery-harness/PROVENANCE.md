@@ -11,7 +11,7 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 | spec-driven-development | 1.0.1 (e9c04b6ce01e855f808af3faadfc1cb36776270a) | Specification/check engine, templates, technical references and regressions; exact source hashes below |
 | product-driven-development | 0.5.0 (ebe92fbdda305fbf117badb16fecff233d5de287) | Markdown model and bounded session evidence helper/tests; provenance below |
 | ai-factory | 1.0.2 (ba64c6220167364e4c1f8d209e9ed77f12f57968) | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
-| orchestrate | 0.7.1 (6679439a44eb0b80fdbff59dfe995132ba44f9f9) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
+| orchestrate | 0.8.0 (e4d73a7f97082cb1a2585208ff3db1f9d4b0d130) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
 
 No license file was present in the inspected spec/product/factory repositories. No
@@ -22,7 +22,7 @@ Names here identify source workflows and supported hosts, not repository authors
 
 The public spec/product/factory pins match the source skill trees previously used
 for the integration byte-for-byte. Orchestrate is selectively reviewed through
-0.7.1 as described below. Source pins alone do not replace runtime implementations
+0.8.0 as described below. Source pins alone do not replace runtime implementations
 or imply adoption of later upstream updates.
 
 ## Specification engine bundle (spec-driven-development 1.0.0)
@@ -178,3 +178,18 @@ Codex runner refuses authority arguments, so Codex keeps the native-agent path.
   `spec_flow.py`. This bundle's `scalar` and `parse_simple_yaml` are already
   identical to that version, with its own fallback-parser regressions, so nothing
   changes in this bundle.
+
+## Resume at the gate (1.5.0, orchestrate 0.8.0)
+
+- Orchestrate 0.8.0 adds `resume_at: "gate"` to the prepare result of an external
+  authority (its `references/authority.md`): the loop skips the dispatch,
+  implementer and collect steps of the task's first round and starts at the gate.
+  The shipped `workflows/orchestrate-execute.js` is the pinned upstream file byte
+  for byte (`SCRIPT_VERSION` 0.8.0).
+- `workflow_steps.py prepare` returns it for a task the engine holds as REPORTED,
+  after read-only checks: the run is active, unblocked and unintegrated, the
+  worktree still matches the imported report, and no unanswered FAIL covers that
+  content. DISPATCHED, VERIFIED and every other held state are still refused, each
+  with the way out. The gates rerun on the current content and the review follows.
+- The upstream release tooling (`scripts/release.py`, `release.yml`, `AGENTS.md`)
+  and its tests are not applicable; this repository has its own release check.
