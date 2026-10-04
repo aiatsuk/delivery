@@ -1,6 +1,6 @@
 {
   "name": "delivery-harness",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "repository": "https://github.com/aiatsuk/delivery",
   "description": "One product-to-PR workflow with approved specifications, isolated agents, evidence-bound verification and safe Git delivery.",
   "author": {

@@ -688,9 +688,37 @@ def integrate_patches(worktree: str | Path, patches: list[dict], base_sha: str) 
     return after
 
 
+def _gitlinks(root: Path) -> set[str]:
+    """Submodule paths (mode 160000) recorded in the worktree's HEAD or index."""
+    links = set()
+    head = _git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
+    sources = [_git(root, "ls-files", "--stage", "-z").stdout]
+    if head.returncode == 0:
+        sources.append(_git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD").stdout)
+    for raw in sources:
+        for item in raw.split(b"\0"):
+            if item.startswith(b"160000 "):
+                links.add(os.fsdecode(item.split(b"\t", 1)[1]))
+    return links
+
+
+def _submodule_placeholder(path: Path) -> bool:
+    """True only for a real, empty directory: an uninitialized submodule."""
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode) and not os.listdir(path)
+    except OSError:
+        return False
+
+
 def _artifact_inventory(root: Path) -> list[str]:
-    """Find all untracked artifacts, including ignored files and empty directories."""
+    """Find all untracked artifacts, including ignored files and empty directories.
+
+    An empty directory at a submodule path (gitlink) is Git's own placeholder for
+    an uninitialized submodule and is expected. A populated submodule checkout is
+    reported as an artifact, because its contents are not part of this tree.
+    """
     tracked = set(_names(root, "ls-files", "-z"))
+    gitlinks = _gitlinks(root)
     expected_dirs = {str(parent) for name in tracked for parent in PurePosixPath(name).parents
                      if str(parent) != "."}
     artifacts = []
@@ -704,8 +732,12 @@ def _artifact_inventory(root: Path) -> list[str]:
             relative = candidate.relative_to(root).as_posix()
             if candidate.is_symlink():
                 dirs.remove(name)
-                if relative not in tracked:
+                if relative not in tracked or relative in gitlinks:
                     artifacts.append(relative)
+            elif relative in gitlinks and relative not in expected_dirs:
+                dirs.remove(name)
+                if not _submodule_placeholder(candidate):
+                    artifacts.append(relative + "/")
             elif relative not in expected_dirs:
                 artifacts.append(relative + "/")
                 dirs.remove(name)
@@ -740,6 +772,15 @@ def remove_worktree(primary: str | Path, path: str | Path,
     _clean(target, ignored=True)
     if _branch(target) != expected_branch or _head(target) != expected_head:
         raise GitError("WORKTREE_IDENTITY", "The worktree identity changed during the cleanup checks.")
+    # Only empty, uninitialized submodule placeholders may remain. A populated
+    # checkout or per-worktree submodule repositories are preserved; removal
+    # never uses --force, so Git itself still refuses initialized submodules.
+    submodules = sorted(name + "/" for name in _gitlinks(target)
+                        if os.path.lexists(target / name) and not _submodule_placeholder(target / name))
+    modules = Path(_text(target, "rev-parse", "--absolute-git-dir")) / "modules"
+    if submodules or os.path.lexists(modules):
+        raise GitError("WORKTREE_ARTIFACTS", "The worktree contains initialized submodules that must be preserved.",
+                       {"files": submodules or [str(modules)]})
     _git(root, "worktree", "remove", "--", str(target))
     return {"primary": str(root), "worktree": str(target), "branch": expected_branch,
             "head": expected_head, "removed": True, "branch_preserved": True}

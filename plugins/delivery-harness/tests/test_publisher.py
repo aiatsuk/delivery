@@ -671,5 +671,49 @@ class ProviderContractTests(unittest.TestCase):
             p._history("Изменить интерфейс", "Title", 250)
 
 
+
+class SubmoduleArtifactTests(unittest.TestCase):
+    """Cleanup blockers with a real `git submodule add` repository."""
+
+    def setUp(self):
+        import tempfile
+        environment = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+            "GIT_AUTHOR_NAME": "Fixture Maintainer", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture Maintainer", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        folder = tempfile.TemporaryDirectory(prefix="delivery-submodule-test-")
+        self.addCleanup(folder.cleanup)
+        self.home = Path(folder.name).resolve()
+        source, self.repo = self.home / "library", self.home / "primary"
+        for path in (source, self.repo):
+            git(self.home, "init", "--initial-branch=main", str(path))
+            (path / "README.txt").write_text("fixture\n")
+            git(path, "add", "--", "README.txt")
+            git(path, "commit", "-m", "Create fixture")
+        git(self.repo, "-c", "protocol.file.allow=always", "submodule", "add", "--", str(source), "vendor/lib")
+        git(self.repo, "commit", "-m", "Add library submodule")
+        self.tree = self.home / "task"
+        git(self.repo, "worktree", "add", "-b", "task/submodule", str(self.tree))
+
+    def blockers(self):
+        info = p.git_ops.inspect_repo(self.tree)
+        return p._artifact_paths(info, {"path": str(self.tree)})
+
+    def test_uninitialized_submodule_placeholder_does_not_block_cleanup(self):
+        self.assertEqual([], list((self.tree / "vendor/lib").iterdir()))
+        self.assertEqual([], self.blockers())
+
+    def test_stray_empty_directory_still_blocks_cleanup(self):
+        (self.tree / "vendor/empty").mkdir()
+        self.assertEqual(["vendor/empty/"], self.blockers())
+
+    def test_initialized_submodule_checkout_still_blocks_cleanup(self):
+        git(self.tree, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+        self.assertEqual(["vendor/lib/"], self.blockers())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -436,6 +436,58 @@ class GitSafetyTests(unittest.TestCase):
         self.assert_code("WORKTREE_ARTIFACTS", git.remove_worktree, self.primary, root, branch, self.base)
         self.assertTrue((root / "empty").exists())
 
+    def submodule_base(self):
+        """Commit a real submodule into the primary and return the new base."""
+        source = self.folder / "library-source"
+        self.command(self.folder, "init", "--initial-branch=main", str(source))
+        self.write(source, "lib.txt", "library\n")
+        self.command(source, "add", "--", "lib.txt")
+        self.command(source, "commit", "-m", "Create library fixture")
+        self.command(self.primary, "-c", "protocol.file.allow=always", "submodule", "add", "--", str(source), "vendor/lib")
+        self.command(self.primary, "commit", "-m", "Add library submodule")
+        self.base = self.command(self.primary, "rev-parse", "HEAD").strip()
+        return source
+
+    def test_cleanup_removes_worktree_with_uninitialized_submodule_placeholder(self):
+        self.submodule_base()
+        root = self.task()
+        branch = git.inspect_repo(root)["branch"]
+        self.assertTrue((root / "vendor/lib").is_dir())
+        self.assertEqual([], list((root / "vendor/lib").iterdir()))
+        self.assertEqual([], git._artifact_inventory(root))
+        result = git.remove_worktree(self.primary, root, branch, self.base)
+        self.assertTrue(result["removed"])
+        self.assertFalse(root.exists())
+        self.assertEqual(self.command(self.primary, "rev-parse", branch).strip(), self.base)
+
+    def test_cleanup_with_submodule_still_refuses_stray_empty_directory(self):
+        self.submodule_base()
+        root = self.task()
+        (root / "vendor/empty").mkdir()
+        branch = git.inspect_repo(root)["branch"]
+        self.assertEqual(["vendor/empty/"], git._artifact_inventory(root))
+        self.assert_code("WORKTREE_ARTIFACTS", git.remove_worktree, self.primary, root, branch, self.base)
+        self.assertTrue((root / "vendor/empty").is_dir())
+
+    def test_cleanup_preserves_initialized_submodule_checkout(self):
+        self.submodule_base()
+        root = self.task()
+        self.command(root, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+        self.assertTrue((root / "vendor/lib/lib.txt").exists())
+        branch = git.inspect_repo(root)["branch"]
+        self.assertEqual(["vendor/lib/"], git._artifact_inventory(root))
+        self.assert_code("WORKTREE_ARTIFACTS", git.remove_worktree, self.primary, root, branch, self.base)
+        self.assertEqual("library\n", (root / "vendor/lib/lib.txt").read_text())
+
+    def test_cleanup_refuses_initialized_submodule_even_if_inventory_misses_it(self):
+        self.submodule_base()
+        root = self.task()
+        self.command(root, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+        branch = git.inspect_repo(root)["branch"]
+        with patch.object(git, "_artifact_inventory", return_value=[]):
+            self.assert_code("WORKTREE_ARTIFACTS", git.remove_worktree, self.primary, root, branch, self.base)
+        self.assertEqual("library\n", (root / "vendor/lib/lib.txt").read_text())
+
     def test_cleanup_requires_exact_branch_head_and_clean_owned_worktree(self):
         root = self.task()
         branch = git.inspect_repo(root)["branch"]

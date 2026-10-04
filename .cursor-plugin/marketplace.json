@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "One evidence-bound product-to-PR delivery workflow.",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "pluginRoot": "plugins"
   },
   "plugins": [
@@ -13,7 +13,7 @@
       "name": "delivery-harness",
       "source": "delivery-harness",
       "description": "One evidence-bound product-to-PR delivery workflow.",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "author": {
         "name": "Andrei Iatsuk"
       },
