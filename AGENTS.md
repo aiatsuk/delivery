@@ -28,3 +28,17 @@ field the consumer reads is in what the producer emits. Test refusal and `blocke
 branches like success paths, and check policy inputs (commit messages, PR text)
 before any state change so a refusal never invalidates a run. A release is done
 after one live local-only run of the exported package through the shipped workflow.
+
+## Releasing
+
+Every merged version is a tag `vX.Y.Z` on main and a GitHub Release whose notes
+are that version's CHANGELOG.md section. In the release PR, bump every version
+file listed in `VERSION_FILES` in `tools/release.py` (VERSION, the three plug-in
+manifests, both `.cursor-plugin/marketplace.json` entries, README.md and
+plugins/delivery-harness/README.md) and add a `## X.Y.Z` section to CHANGELOG.md;
+`python3 -S -B tools/release.py check --tag vX.Y.Z` must pass. After merge, tag
+main: `git tag -a vX.Y.Z -m "Delivery X.Y.Z" <merged main sha>` and
+`git push origin vX.Y.Z`. The release workflow checks the versions, runs
+`make check` and `make test`, and publishes the GitHub Release; it packages and
+uploads nothing else. `gh workflow run release.yml -f tag=vX.Y.Z` republishes the
+release for an existing tag.

@@ -1,5 +1,17 @@
 # Changes
 
+## 1.4.1
+
+Cleanup fix for repositories with submodules.
+
+- `cleanup` and `remove_worktree` no longer treat the empty directory Git leaves
+  for an uninitialized submodule (a gitlink in the worktree's HEAD or index) as
+  an artifact, so such a worktree is removed after the usual identity,
+  cleanliness and content checks. Removal still uses plain `git worktree remove`
+  without `--force`. A stray empty directory still blocks with
+  `cleanup_artifacts`, and an initialized submodule checkout is still preserved
+  (`cleanup_artifacts` / `WORKTREE_ARTIFACTS`).
+
 ## 1.4.0
 
 Upstream sync and two fixes.

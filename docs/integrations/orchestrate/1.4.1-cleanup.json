@@ -1,0 +1,39 @@
+{
+  "source_revision": "6679439a44eb0b80fdbff59dfe995132ba44f9f9",
+  "disposition": "integrated",
+  "rationale": "Same pin (orchestrate 0.7.1 at 6679439), no upstream change; the shipped workflows/orchestrate-execute.js is unchanged and still byte-identical to the submodule file, and the loop contract is unchanged. Mapped files changed locally in 1.4.1: git_ops.py treats the empty directory git leaves for an uninitialized submodule (a gitlink in the worktree's HEAD or index) as expected, so cleanup and remove_worktree remove such a worktree after the existing identity, cleanliness and content checks; an initialized submodule checkout (a non-empty gitlink directory or a modules folder in the worktree's git directory) and any other empty or untracked directory still block with WORKTREE_ARTIFACTS / cleanup_artifacts, and removal still uses plain git worktree remove without --force. tests/test_git_ops.py adds the regression tests; README.md changes only its version to 1.4.1. The unmapped publisher test file and the new release tooling (tools/release.py, release.yml, AGENTS.md) do not touch orchestrate-derived contracts.",
+  "reviewer": "Run release-system-20261004 task reviews on October 4, 2026, each by two independent read-only reviewers on the staged task tree. Cleanup task (git_ops.py, tests, 1.4.1 version bump), conformance and adversary lenses: PASS, no defects. They confirmed that _gitlinks reads mode 160000 entries from the index and HEAD with NUL-safe parsing; _artifact_inventory skips only an empty real directory at a gitlink path (a filled one, a symlink and any other empty directory are still reported); remove_worktree keeps its identity, lock, operation, cleanliness and inventory checks, then refuses with WORKTREE_ARTIFACTS when a gitlink path is not an empty placeholder or the worktree's own git directory has a modules folder, and still uses plain git worktree remove without --force; publisher._artifact_paths gets the fix through git_ops._artifact_inventory without an edit. One reviewer restored the old git_ops.py and saw 5 of the 7 new submodule tests fail (the two initialized-checkout guards passed, as expected); the other probed with git 2.55.0 that plain removal succeeds for a placeholder-only worktree. Noted, not defects: a deinitialized submodule with a leftover modules folder makes remove_worktree block (safe and conservative); three blank lines in test_publisher.py. Release task (tools/release.py, tools/tests/test_release.py, .github/workflows/release.yml, AGENTS.md), conformance and adversary lenses: PASS, no defects; these files are not mapped to any upstream source. No separate review of this record yet; the run's final verification reviews it. Review prose does not authenticate identity.",
+  "tests": "Cleanup regression tests written first and seen failing before the fix on October 4, 2026, all on a real git submodule add repository: tests.test_git_ops (uninitialized placeholder removed with its branch kept; stray empty directory next to a submodule still WORKTREE_ARTIFACTS; initialized checkout reported and kept; initialized checkout with the inventory mocked empty still WORKTREE_ARTIFACTS, red as GIT_FAILED) and tests.test_publisher SubmoduleArtifactTests (placeholder gives no blockers; stray empty directory blocks; initialized checkout blocks). Task gates on October 4, 2026: python3 -S -B -m unittest tests.test_git_ops tests.test_publisher, 83 tests OK; validate_bundle.py valid; git diff --cached --check clean; tools tests 33 OK; actionlint on release.yml clean; release.py check --tag v1.4.1 exit 0. make check after this record. The full suite (tools and plug-in catalog) runs in the run's final verification after this record and is not claimed here. No live host run of 1.4.1 yet. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/workflows/orchestrate-execute.js",
+    "skill/SKILL.md",
+    "skill/references/routing.md",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "VERSION"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/scripts/validate_bundle.py",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_steps.py",
+    "plugins/delivery-harness/skills/delivery/workflows/orchestrate-execute.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_run_engine.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}
