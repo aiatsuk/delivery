@@ -1,5 +1,29 @@
 # Changes
 
+## 1.5.0
+
+A new loop contract: an interrupted task resumes at the gate.
+
+- Pin orchestrate 0.8.0 (e4d73a7); the shipped loop is the upstream 0.8.0 file
+  (`SCRIPT_VERSION` 0.8.0), which accepts `resume_at: "gate"` from the
+  authority's prepare step. Saved copies of the loop must be refreshed, since the
+  loop refuses arguments of another version.
+- A task the engine holds as REPORTED (its implementer's result was imported,
+  then the host session or loop stopped, also after its gates ran) is no longer
+  refused by a new loop: `prepare` returns `resume_at: "gate"` and the loop reruns
+  the gates on the current content, then review, rework and finish as usual,
+  without a new dispatch or implementer. `prepare` changes nothing in the run.
+- `prepare` still refuses, with the way out in its message: a REPORTED task whose
+  worktree changed since its report or whose content has an unanswered FAIL
+  (`task-rework`), any task while the run is blocked or no longer in unintegrated
+  implementation, a DISPATCHED task (wait, then `task-import` or `task-abandon`)
+  and a VERIFIED task. The step schema lists `resume_at`.
+- End-to-end cleanup tests: `cleanup` on a merged run whose repository has an
+  uninitialized submodule removes the task worktree (receipt `removed: true`),
+  and a stray empty directory still refuses with `cleanup_artifacts`.
+- Spec-driven-development, product-driven-development and AI Factory pins are
+  unchanged; new review records for all four sources.
+
 ## 1.4.1
 
 Cleanup fix for repositories with submodules.

@@ -4,7 +4,7 @@ One self-contained plugin for product context, precise specifications, isolated
 implementation, independent verification and a fresh-main worktree-to-PR flow.
 It reconciles five workflows instead of invoking five competing coordinators.
 
-Version 1.4.1 is maintained in [the Delivery repository](https://github.com/aiatsuk/delivery)
+Version 1.5.0 is maintained in [the Delivery repository](https://github.com/aiatsuk/delivery)
 under `plugins/delivery-harness`. The repository pins public upstream tools as Git
 submodules and provides `tools/upstreams.py` for explicit, content-bound update
 review. Those development inputs/tools are intentionally not runtime dependencies.
@@ -44,7 +44,7 @@ left untouched; do not invoke them as additional top-level coordinators inside a
 Delivery Harness run. Their useful mechanisms are shipped as internal modules and
 one precedence contract. Configured models are inherited, never secretly pinned.
 
-The Orchestrate integration now reflects upstream 0.7.1; see the selective-update
+The Orchestrate integration now reflects upstream 0.8.0; see the selective-update
 mapping in [provenance](PROVENANCE.md). Upstream plugins can be updated independently,
 but this vendored bundle adopts changes only through explicit review, testing and
 reinstallation. It does not automatically load newer upstream code.
