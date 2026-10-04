@@ -23,6 +23,7 @@ unauthorized gate) comes back as ``blocked`` with the engine's reason.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -239,7 +240,9 @@ def resume_reported(a, owner: dict) -> dict:
 
     Read-only: the gates rerun on the current content and the review follows as in a normal round. A
     task whose content no longer matches its report, or whose current content already carries an
-    unanswered FAIL, would only fail later, so it is refused here with the way out.
+    unanswered FAIL (harvested, or returned to the host journal and not yet harvested), or whose
+    review harvest cannot read every journal, would only fail later, so it is refused here with the
+    way out.
     """
     reason = blocker(a.run)
     if reason:
@@ -256,7 +259,13 @@ def resume_reported(a, owner: dict) -> dict:
         if not held.get("report") or not run_engine.evidence_current(held["report"], snap):
             return {"exit_code": 1, "output": f"task {a.task} is REPORTED but its worktree changed since its report; send it back with "
                     "task-rework (a new dispatch reports the current content) instead of resuming at the gate"}
-        failures = run_engine._unoverridden_failures(run, a.task, snap)
+        # The harvest every mutating command runs first, on a copy: a FAIL already returned to the host
+        # journal but not yet harvested counts here too, and the run itself is not written. An incomplete
+        # harvest (an unreadable journal could hold a FAIL) refuses, as review-import would later.
+        view = copy.deepcopy(run)
+        run_engine.harvest_reviews(view)
+        run_engine.require_complete_harvest(view)
+        failures = run_engine._unoverridden_failures(view, a.task, snap)
         if failures:
             return {"exit_code": 1, "output": f"task {a.task} is REPORTED but its current content has an unanswered FAIL review from "
                     f"{failures[0].get('actor', 'a reviewer')}; send it back with task-rework, or record authorize --scope decision "

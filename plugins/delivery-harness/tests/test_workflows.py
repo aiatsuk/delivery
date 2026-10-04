@@ -178,13 +178,13 @@ class LoopTests(RunFixture):
         return owner
 
     def refused(self, *words):
-        before = e.load(self.root)["revision"]
+        before = (self.root / "run.json").read_bytes()
         prep = self.steps("prepare", "--task", "value")
         self.assertEqual(1, prep["exit_code"], prep)
         self.assertNotIn("resume_at", prep)
         for word in words:
             self.assertIn(word, prep["output"] + prep.get("blocked", ""))
-        self.assertEqual(before, e.load(self.root)["revision"])
+        self.assertEqual(before, (self.root / "run.json").read_bytes(), "a refused prepare must not change the run")
         out = self.loop(self.steps("args", "--task", "value"), run_id="wf_loop-0009")
         self.assertEqual(["prepare:value"], self.labels(out))
         self.assertEqual("BLOCKED", self.result(out)["status"])
@@ -239,6 +239,72 @@ class LoopTests(RunFixture):
         self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": "after\n"}}], "collect:value:r0": [None]})
         self.assertEqual("DISPATCHED", e.load(self.root)["tasks"]["value"]["status"])
         self.refused("DISPATCHED", "task-import", "task-abandon")
+
+    def test_a_reported_task_whose_worker_committed_cannot_resume(self):
+        owner = self.interrupted()
+        git(Path(owner["path"]), "commit", "-m", "A worker committed after its report")
+        self.refused("REPORTED", "cannot resume", "task_commit_forbidden")
+        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+
+    def test_a_reported_task_whose_worktree_is_gone_cannot_resume(self):
+        owner = self.interrupted()
+        shutil.rmtree(owner["path"])
+        prep = self.refused("REPORTED", "cannot resume")
+        self.assertNotIn("Traceback", prep["output"])
+
+    def test_a_reported_task_outside_unintegrated_implementation_is_refused(self):
+        self.interrupted()
+        sys.path.insert(0, str(SCRIPTS))
+        import workflow_steps
+        real = e.load(self.root)
+        before = (self.root / "run.json").read_bytes()
+        cases = {"VERIFYING": None, "IMPLEMENTING": {"path": "/integration", "branch": "delivery/integration", "base_sha": real["base_sha"]}}
+        for state, integration in cases.items():
+            with self.subTest(state=state, integrated=bool(integration)):
+                view = {**real, "state": state, "integration": integration}
+                with mock.patch.object(e, "load", return_value=view):
+                    out = workflow_steps.step_prepare(mock.Mock(run=str(self.root), task="value"))
+                self.assertEqual(1, out["exit_code"], out)
+                self.assertNotIn("resume_at", out)
+                self.assertIn(f"the run is {state}", out["output"])
+                self.assertEqual(bool(integration), "and integrated" in out["output"])
+                self.assertIn("active, unintegrated implementation", out["output"])
+        self.assertEqual(before, (self.root / "run.json").read_bytes())
+
+    def test_a_reported_task_with_a_returned_fail_review_is_refused_before_and_after_its_harvest(self):
+        self.begin()
+        defect = {"file": "value.txt", "line": 1, "kind": "behavior", "severity": "major", "summary": "Missing edge case.", "scenario": "Synthetic."}
+        # The reviewer returned a FAIL, then the loop stopped before review-close imported it.
+        out = self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": "after\n"}}],
+                                             "review:value:r0:conformance": [{"verdict": "FAIL", "defects": [defect]}],
+                                             "review-close:value:r0": [None]})
+        self.assertEqual("BLOCKED", self.result(out)["status"])
+        run = e.load(self.root)
+        self.assertEqual(("REPORTED", []), (run["tasks"]["value"]["status"], run.get("harvested_reviews", [])))
+        self.refused("unanswered FAIL", "task-rework")
+        # Once an ordinary command harvests the FAIL, it guards the same content.
+        e.block(self.root, "Synthetic fixture blocker.")
+        e.resume(self.root, "Synthetic fixture resolution.")
+        run = e.load(self.root)
+        self.assertEqual(["FAIL"], [receipt["verdict"] for receipt in run["harvested_reviews"]])
+        self.assertEqual("REPORTED", run["tasks"]["value"]["status"])
+        self.refused("unanswered FAIL", "workflow-agent:wf_loop-0001/")
+
+    def test_a_reported_task_is_refused_while_a_journal_with_its_verdict_is_unreadable(self):
+        self.begin()
+        defect = {"file": "value.txt", "line": 1, "kind": "behavior", "severity": "major", "summary": "Missing edge case.", "scenario": "Synthetic."}
+        self.loop(self.steps("args"), {"impl:value:L0": [{"write": {"value.txt": "after\n"}}],
+                                       "review:value:r0:conformance": [{"verdict": "FAIL", "defects": [defect]}],
+                                       "review-close:value:r0": [None]})
+        self.assertEqual("REPORTED", e.load(self.root)["tasks"]["value"]["status"])
+        journal = self.host_root / "fixture-project" / "fixture-session" / "subagents" / "workflows" / "wf_loop-0001" / "journal.jsonl"
+        mode = journal.stat().st_mode
+        journal.chmod(0)
+        self.addCleanup(journal.chmod, mode)
+        # The FAIL sits in a journal no harvest can read, so nothing proves the content is unanswered.
+        self.refused("harvest_incomplete", str(journal), "restore read access")
+        journal.chmod(mode)
+        self.refused("unanswered FAIL")
 
     def test_a_verified_task_is_refused(self):
         self.begin()
