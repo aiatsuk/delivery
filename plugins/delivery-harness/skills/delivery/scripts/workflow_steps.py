@@ -395,6 +395,10 @@ def step_finish(a) -> dict:
 
 # ---------------------------------------------------------------- arguments for the loop
 
+UTILITY_MODEL = "haiku"
+UTILITY_EFFORT = "low"
+
+
 def loop_version() -> str:
     match = re.search(r"^const SCRIPT_VERSION = '([^']+)'$", LOOP.read_text(encoding="utf-8"), re.M)
     if not match:
@@ -412,7 +416,11 @@ def build_args(a) -> dict:
     if unknown:
         raise StepError(f"unknown task(s): {', '.join(unknown)}")
     step = {"tier": 0, "model": a.model, "effort": a.effort}
-    lenses = [{"key": lens, "model": a.model, "effort": a.effort} for lens in (a.lens or ["conformance"])]
+    review_model = a.review_model or a.model
+    review_effort = a.review_effort or a.effort
+    lenses = [{"key": lens, "model": review_model, "effort": review_effort} for lens in (a.lens or ["conformance"])]
+    # Relay steps only run one engine command and return its JSON, so they never need the session's model.
+    utility = {"tier": 0, "model": a.utility_model or UTILITY_MODEL, "effort": a.utility_effort or UTILITY_EFFORT}
     tasks = []
     for tid in order:
         if tid not in selected:
@@ -445,7 +453,7 @@ def build_args(a) -> dict:
         "schema": "orchestrate-execute-args/v1", "version": loop_version(), "harness": "claude", "run_dir": str(Path(a.run).resolve()),
         "authority": {"name": "delivery", "helper": helper},
         "reviewer_brief": f"{SKILL / 'references' / 'host-execution.md'} (section Independent review brief)",
-        "limits": {"rework_rounds": 5}, "utility": None,
+        "limits": {"rework_rounds": 5}, "utility": utility,
         "agent_types": {"implementer": None, "reviewer": None}, "role_text": {},
         "formats": {"report": REPORT_FORMAT, "verdict": VERDICT_FORMAT, "brief": BRIEF},
         "schemas": {"report": REPORT, "verdict": VERDICT, "gate": GATE, "finish": FINISH, "step": STEP},
@@ -463,6 +471,10 @@ def parser() -> argparse.ArgumentParser:
     args.add_argument("--lens", action="append")
     args.add_argument("--model")
     args.add_argument("--effort")
+    args.add_argument("--review-model", help="model for review lenses; defaults to --model")
+    args.add_argument("--review-effort", help="effort for review lenses; defaults to --effort")
+    args.add_argument("--utility-model", help=f"model for relay steps (default {UTILITY_MODEL})")
+    args.add_argument("--utility-effort", help=f"effort for relay steps (default {UTILITY_EFFORT})")
     args.add_argument("--integration", action="store_true")
     for name in ("prepare", "dispatch", "collect", "finish"):
         sub.add_parser(name).add_argument("--task", required=True)

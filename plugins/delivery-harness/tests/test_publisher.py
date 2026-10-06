@@ -340,10 +340,26 @@ class PublisherTests(PublisherFixture):
         self.grant_merge()
         fresh = self.remote_commit({"new-main.txt": "Fresh main.\n"})
         p.refresh(self.root, provider=self.provider)
-        args = mock.Mock(run=str(self.root), task=None, lens=None, model=None, effort=None, integration=True)
+        args = mock.Mock(run=str(self.root), task=None, lens=None, model=None, effort=None, review_model=None, review_effort=None,
+                         utility_model=None, utility_effort=None, integration=True)
         flow = workflow_steps.build_args(args)
         self.assertNotEqual(original["base_sha"], fresh)
         self.assertEqual(fresh, flow["integration"]["base_sha"])
+
+    def test_args_route_relay_steps_to_a_cheap_model_and_reviews_separately(self):
+        import workflow_steps
+        self.published()
+        self.grant_merge()
+        args = mock.Mock(run=str(self.root), task=None, lens=["conformance", "adversary"], model="sonnet", effort="medium",
+                         review_model="opus", review_effort="high", utility_model=None, utility_effort=None, integration=True)
+        flow = workflow_steps.build_args(args)
+        self.assertEqual({"tier": 0, "model": "haiku", "effort": "low"}, flow["utility"])
+        self.assertEqual([("opus", "high")] * 2, [(l["model"], l["effort"]) for l in flow["integration"]["lenses"]])
+        args.review_model = args.review_effort = None
+        args.utility_model, args.utility_effort = "sonnet", "medium"
+        flow = workflow_steps.build_args(args)
+        self.assertEqual([("sonnet", "medium")] * 2, [(l["model"], l["effort"]) for l in flow["integration"]["lenses"]])
+        self.assertEqual(("sonnet", "medium"), (flow["utility"]["model"], flow["utility"]["effort"]))
 
     def test_rebase_conflict_preserves_operation_and_resumes_after_explicit_fixture_fix(self):
         original = self.published()

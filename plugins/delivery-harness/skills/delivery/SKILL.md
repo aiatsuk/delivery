@@ -123,6 +123,12 @@ instead of typed text (details in the host reference):
   prepares, registers each dispatch, imports each result, runs the planned gates,
   records rework, issues review tokens and imports the verdicts through the
   engine. The engine's budgets decide; a refusal ends the task BLOCKED with its reason.
+- Cost: relay steps (prepare, dispatch, collect, gate, review open/close, finish) only run one
+  engine command and return its JSON, so `args` defaults them to `haiku` at `low` effort
+  (`--utility-model`, `--utility-effort` override). Implementers use `--model/--effort`, review
+  lenses `--review-model/--review-effort` (default: the same as the implementer); when none is
+  given they inherit the session model. Start the coordinator from a fresh or compacted context
+  (under about 200k tokens) before launching a loop: every coordinator turn re-reads it.
 - After `integrate` and the integrated gates, `args --integration` runs the
   integrated review the same way. Read `status` after every loop; never redo a
   step the loop recorded.
