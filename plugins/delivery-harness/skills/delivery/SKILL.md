@@ -119,7 +119,7 @@ Ask once if required capabilities or cost authority are missing.
 
 Choose the path first: `scripts/workflow_steps.py --run ROOT path`. `direct` (a Small
 run with at most two independent open tasks and no risky tag) skips the loop: use the
-native-agent steps below with the models it reports. `loop` gives its reasons.
+native-agent steps below with the model and effort it reports. `loop` gives its reasons.
 
 On a host with a workflow runtime (Claude Code), when `path` says `loop`, run the shared execution loop,
 so every step is code and agent identity and results come from the host journal

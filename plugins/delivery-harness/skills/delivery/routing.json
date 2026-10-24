@@ -3,15 +3,15 @@
   "tiers": {
     "1": {
       "model": "haiku",
-      "effort": null
+      "effort": "medium"
     },
     "2": {
       "model": "sonnet",
-      "effort": null
+      "effort": "xhigh"
     },
     "3": {
       "model": "opus",
-      "effort": null
+      "effort": "high"
     }
   },
   "reviewer_default_tier": 3,

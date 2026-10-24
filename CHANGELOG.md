@@ -1,8 +1,14 @@
 # Changes
 
-## Unreleased
+## 1.6.0
 
-Task tier routing and a direct path for small runs.
+Task tier routing, a direct path for small runs, and orchestrate 0.9.0.
+
+- Pin orchestrate 0.9.0 (d438044); the shipped loop is the upstream 0.9.0 file
+  (`SCRIPT_VERSION` 0.9.0). Saved copies of the loop must be refreshed, since the
+  loop refuses arguments of another version.
+- `routing.json` takes orchestrate 0.9.0's tier efforts: tier 1 at medium, tier 2
+  at xhigh, tier 3 at high, from a per-task replay recorded upstream.
 
 - A plan task may carry `tier` (1 to 3), `reviewer_tier` and `risk` tags. The
   engine checks them: the reviewer is not below the tier, tier 1 is reviewed at

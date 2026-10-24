@@ -11,7 +11,7 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 | spec-driven-development | 1.0.1 (e9c04b6ce01e855f808af3faadfc1cb36776270a) | Specification/check engine, templates, technical references and regressions; exact source hashes below |
 | product-driven-development | 0.5.0 (ebe92fbdda305fbf117badb16fecff233d5de287) | Markdown model and bounded session evidence helper/tests; provenance below |
 | ai-factory | 1.0.2 (ba64c6220167364e4c1f8d209e9ed77f12f57968) | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
-| orchestrate | 0.8.0 (e4d73a7f97082cb1a2585208ff3db1f9d4b0d130) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
+| orchestrate | 0.9.0 (d43804464763580abfa9318a556262e231fa51d2) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
 
 No license file was present in the inspected spec/product/factory repositories. No
@@ -22,7 +22,7 @@ Names here identify source workflows and supported hosts, not repository authors
 
 The public spec/product/factory pins match the source skill trees previously used
 for the integration byte-for-byte. Orchestrate is selectively reviewed through
-0.8.0 as described below. Source pins alone do not replace runtime implementations
+0.9.0 as described below. Source pins alone do not replace runtime implementations
 or imply adoption of later upstream updates.
 
 ## Specification engine bundle (spec-driven-development 1.0.0)
@@ -197,7 +197,7 @@ Codex runner refuses authority arguments, so Codex keeps the native-agent path.
 - The upstream release tooling (`scripts/release.py`, `release.yml`, `AGENTS.md`)
   and its tests are not applicable; this repository has its own release check.
 
-## Task tier routing (unreleased)
+## Task tier routing (1.6.0)
 
 `skills/delivery/routing.json` copies the Claude section and the risk tags of
 orchestrate's `skill/routing.json` at the pinned upstream; a test keeps the two equal.
@@ -213,4 +213,12 @@ and untiered tasks still inherit it, and a model the user selects overrides the 
 Orchestrate's escalation chain is still not used (the authority loop runs one step per
 task), and Codex keeps configured models because the table names Claude models.
 `workflow_steps.py path` sends a Small run with at most two independent open tasks without a risky tag
-tasks to the native-agent path instead of the loop.
+to the native-agent path instead of the loop.
+
+Delivery 1.6.0 pins orchestrate 0.9.0 (d438044): the shipped loop is the upstream 0.9.0 file
+(`SCRIPT_VERSION` 0.9.0, no behaviour change in the loop itself), and `routing.json` takes the tier
+efforts that release added (tier 1 `medium`, tier 2 `xhigh`, tier 3 `high`), measured in
+orchestrate's `evals/results/2026-10-24-effort-per-tier.md`. Orchestrate 0.9.0's delegation gate and
+`plan.py` checks stay on its side. The engine enforces the tier 1 risky-tag and reviewer-tier rules for
+plan tasks; orchestrate's reference-line check for tier 1 specs has no counterpart, since Delivery's
+task contract is JSON written by the engine.
