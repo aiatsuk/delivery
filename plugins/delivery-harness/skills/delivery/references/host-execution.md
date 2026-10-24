@@ -24,7 +24,8 @@ For an explicitly requested CLI launch, grant only the required worktree/run
 directories and specific dependency caches. Never add the whole home directory
 or weaken the sandbox to make a blocked operation pass; request scoped approval.
 
-Do not override models unless the user selected one. Use read-only reviewers and
+The tier models in `routing.json` are Claude models; on Codex keep the configured
+models unless the user selected one. Use read-only reviewers and
 explicit implementation workers. Spawn arguments and role names must match the
 tools available in this session, not a remembered schema. A successful spawn
 returns a handle; record it, then send the dispatch ID back to the worker.
@@ -48,12 +49,24 @@ not interpreted.
 ## Claude Code
 
 Use the available native Agent/subagent facility with the same ownership and
-report contract. Do not require a second orchestration plugin. Keep configured
-models unless explicitly selected by the user. If the host cannot resume a prior
+report contract. Do not require a second orchestration plugin. Spawn implementers
+and reviewers on their task tier's model from `routing.json`, as `workflow_steps.py
+path` reports it; untiered tasks and the coordinator keep the configured model, and
+a model the user selected overrides the tiers. If the host cannot resume a prior
 handle, record its observed absence, preserve the worktree, and register a fresh
 dispatch for an authorized retry. Never reuse a prior report as its new result.
 
-### The shared execution loop (preferred on Claude Code)
+### Choosing the path
+
+`workflow_steps.py --run ROOT path` returns `direct` for a Small run whose open
+tasks are at most two, independent of each other and free of risky tags, with each
+task's implementer and reviewer models. Run those tasks on the native-agent path
+(`task-register`, a spawned worker, `task-report`, the gates, a typed `review` by a
+separate agent): the loop would add seven relay agents to every pass of a task.
+Anything else returns `loop` and the reasons. Unlike orchestrate's root plus review, the direct
+path still spawns one implementer per task in its own worktree, so two independent tasks fit it.
+
+### The shared execution loop (for `path` = `loop`)
 
 The plug-in ships `workflows/orchestrate-execute.js`, the pinned orchestrate
 execution loop, unchanged. Launch it with the `Workflow` tool by name, passing
@@ -66,7 +79,8 @@ another version; refresh the saved copy after an update.
 
 1. `scripts/workflow_steps.py --run ROOT args` prints the arguments: every
    unverified task (or `--task T …`), the lenses (`--lens`, default conformance),
-   an optional `--model`/`--effort` only when the user selected one, and the
+   each task's implementer and reviewer models from its tier (`--model`/`--effort`
+   only when the user selected one model for all), and the
    engine's report and verdict schemas. `--integration` instead targets the
    integration worktree after `integrate` and the integrated gates.
 2. The loop runs each task in dependency order. It calls `workflow_steps.py`, which
@@ -144,7 +158,7 @@ resume). The Codex
 runner of orchestrate refuses these arguments (it writes no host journal); on
 Codex use the native-agent path below.
 
-Omit `model` unless the user selected one; the host's configured model is inherited.
+A task without a tier, like the coordinator, inherits the host's configured model.
 Journals are accepted only under the host projects root the run pinned at `new`
 (`~/.claude/projects`, or `DELIVERY_WORKFLOW_HOST_ROOT` when it was set; shown as
 `workflow_host_root` in status); imports under another effective root are refused.

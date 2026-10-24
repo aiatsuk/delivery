@@ -1,0 +1,45 @@
+{
+  "provenance": "Copy of the claude section and the risk tags of orchestrate skill/routing.json at the pinned upstream; tests keep them equal.",
+  "tiers": {
+    "1": {
+      "model": "haiku",
+      "effort": null
+    },
+    "2": {
+      "model": "sonnet",
+      "effort": null
+    },
+    "3": {
+      "model": "opus",
+      "effort": null
+    }
+  },
+  "reviewer_default_tier": 3,
+  "adversary": {
+    "model": "sonnet",
+    "effort": null
+  },
+  "utility": {
+    "model": "haiku",
+    "effort": "low"
+  },
+  "risky_tags": [
+    "async",
+    "concurrency",
+    "security",
+    "migration",
+    "data"
+  ],
+  "risk_tags": [
+    "async",
+    "concurrency",
+    "security",
+    "migration",
+    "data",
+    "public-api",
+    "ui",
+    "docs",
+    "tests",
+    "build"
+  ]
+}

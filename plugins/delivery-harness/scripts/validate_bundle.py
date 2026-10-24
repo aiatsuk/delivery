@@ -32,7 +32,7 @@ def validate(root):
         errors.append("Host manifest base versions differ")
     skills = sorted(str(p.relative_to(root)) for p in root.rglob("SKILL.md"))
     if skills != ["skills/delivery/SKILL.md"]: errors.append(f"Only one coordinator may be discoverable: {skills}")
-    required = ["README.md", "PROVENANCE.md", "examples/small-plan.json", "skills/delivery/agents/openai.yaml", "skills/delivery/scripts/delivery.py", "skills/delivery/scripts/run_engine.py", "skills/delivery/scripts/git_ops.py", "skills/delivery/scripts/publisher.py", "skills/delivery/scripts/product.py", "skills/delivery/scripts/snapshots.py", "skills/delivery/scripts/gate_jobs.py", "skills/delivery/internal/spec/scripts/spec_flow.py", "skills/delivery/internal/spec/engine-guide.md", "skills/delivery/internal/product/session_evidence.py"]
+    required = ["README.md", "PROVENANCE.md", "examples/small-plan.json", "skills/delivery/agents/openai.yaml", "skills/delivery/scripts/delivery.py", "skills/delivery/scripts/run_engine.py", "skills/delivery/routing.json", "skills/delivery/scripts/git_ops.py", "skills/delivery/scripts/publisher.py", "skills/delivery/scripts/product.py", "skills/delivery/scripts/snapshots.py", "skills/delivery/scripts/gate_jobs.py", "skills/delivery/internal/spec/scripts/spec_flow.py", "skills/delivery/internal/spec/engine-guide.md", "skills/delivery/internal/product/session_evidence.py"]
     for name in required:
         if not (root / name).is_file(): errors.append(f"Missing bundled file: {name}")
     for path in root.rglob("*.py"):

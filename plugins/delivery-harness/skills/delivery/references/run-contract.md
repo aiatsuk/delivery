@@ -47,7 +47,10 @@ The plan's eight scores are integers 0–2. Allowed Large triggers are `payments
 
 Each requirement has `id`, `behavior`, `oracle`. Each task has `id`, `title`,
 `acceptance`, `paths`, `depends_on`, `requirements`, `gates`, and optional named
-`resources`. Paths are literal repository-relative files/directories, not globs,
+`resources`. Optional routing fields: `tier` (1–3), `reviewer_tier` (not below the
+tier, at least 2 for tier 1) and `risk` tags from `routing.json` `risk_tags`; tier 1
+refuses the `risky_tags`. They pick the models of the task's implementer and
+reviewers and its review lenses. Paths are literal repository-relative files/directories, not globs,
 root paths, traversal or Git metadata. Dependency cycles and un-serialized overlap
 are errors. A task owns changes only in its scope and returns a staged patch.
 

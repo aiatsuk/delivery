@@ -25,6 +25,7 @@ import git_ops
 import gate_jobs
 
 SCHEMA = "delivery-run/v1"
+ROUTING_FILE = Path(__file__).resolve().parent.parent / "routing.json"
 AXES = ("product", "ux", "technical", "integration", "risk", "qa", "rollout", "uncertainty")
 LARGE = {"payments", "auth", "security", "privacy", "migration", "new_domain", "breaking_api", "data_loss", "multi_repo", "staged_rollout"}
 MEDIUM = {"backend_client", "sync", "complex_state", "optimistic_update", "important_edges", "runtime_qa", "feature_flag"}
@@ -268,6 +269,48 @@ def gate_timeout(entry: dict) -> int:
     return value
 
 
+def routing_table() -> dict:
+    """The task routing table (routing.json). A missing or malformed table is a run error, not a crash,
+    and only plans that use routing fields need it."""
+    try:
+        table = json.loads(ROUTING_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RunError("invalid_routing", f"Cannot read the routing table {ROUTING_FILE}: {exc}") from None
+    tiers = table.get("tiers") if isinstance(table, dict) else None
+    named = lambda entry: isinstance(entry, dict) and isinstance(entry.get("model"), str) and entry["model"].strip()
+    tags = lambda key: isinstance(table.get(key), list) and all(isinstance(tag, str) for tag in table[key])
+    require(isinstance(tiers, dict) and all(named(tiers.get(str(t))) for t in (1, 2, 3))
+            and type(table.get("reviewer_default_tier")) is int and table["reviewer_default_tier"] in (1, 2, 3)
+            and named(table.get("adversary")) and named(table.get("utility")) and tags("risk_tags") and tags("risky_tags")
+            and set(table["risky_tags"]) <= set(table["risk_tags"]),
+            "invalid_routing", f"The routing table {ROUTING_FILE} needs tiers 1 to 3 with models, reviewer_default_tier, "
+            "adversary and utility models, and risky_tags within risk_tags.")
+    return table
+
+
+def routing_fields(item: dict) -> None:
+    """The optional per-task routing fields: tier, reviewer_tier and risk tags (routing.json)."""
+    if item.get("reviewer_tier", 0) is None:
+        item = {k: v for k, v in item.items() if k != "reviewer_tier"}  # null means the default, as in orchestrate
+    if not {"tier", "reviewer_tier", "risk"} & set(item):
+        return
+    table = routing_table()
+    risk_tags, risky_tags = set(table["risk_tags"]), set(table["risky_tags"])
+    tiers = (1, 2, 3)
+    if "tier" in item or "reviewer_tier" in item:
+        tier = item.get("tier")
+        require(type(tier) is int and tier in tiers, "invalid_tier", "A task tier is 1, 2 or 3 (the haiku, sonnet and opus rows of routing.json).")
+        if "reviewer_tier" in item:
+            reviewer = item["reviewer_tier"]
+            require(type(reviewer) is int and reviewer in tiers and reviewer >= tier, "invalid_tier", "A reviewer tier is 1, 2 or 3 and not below the task tier.")
+            require(tier > 1 or reviewer >= 2, "invalid_tier", "Tier 1 work is reviewed at least one tier up.")
+    risk = item.get("risk", [])
+    require(isinstance(risk, list) and all(isinstance(tag, str) for tag in risk) and len(set(risk)) == len(risk) and set(risk) <= risk_tags,
+            "invalid_risk_tag", f"Task risk tags are distinct names from routing.json: {', '.join(sorted(risk_tags))}.")
+    require(item.get("tier") != 1 or not set(risk) & risky_tags, "invalid_tier",
+            f"Tier 1 never takes risky work ({', '.join(sorted(risky_tags))}); use tier 2 or 3.")
+
+
 def validate_plan(plan: dict) -> dict:
     require(isinstance(plan, dict), "invalid_plan", "Plan must be an object.")
     text(plan.get("goal"), "Goal")
@@ -306,6 +349,7 @@ def validate_plan(plan: dict) -> dict:
             text(gate.get("cleanup"), "Task gate cleanup")
             gate_timeout(gate)
         require(isinstance(item.get("resources", []), list) and all(isinstance(r, str) and r.strip() for r in item.get("resources", [])), "invalid_resource", "Exclusive resources are named strings.")
+        routing_fields(item)
         tasks[tid] = {**item, "depends_on": item.get("depends_on", []), "resources": sorted({r.strip() for r in item.get("resources", [])})}
     require(tasks, "invalid_plan", "No implementation tasks are defined.")
     dependency_map = {tid: ancestors(tasks, tid) for tid in tasks}

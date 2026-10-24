@@ -66,7 +66,8 @@ Factory does not create a second work-item schema. Shared Git identity derives
 from the common directory, with explicit run-owned spec/check roots. Native
 sessions are evidence only when explicitly bound; no implicit reconstruction.
 
-The host's configured model is the default. Delegation uses real host tools,
+Implementers and reviewers run on the task tier's model (task tier routing below);
+the coordinator and untiered tasks keep the host's configured model. Delegation uses real host tools,
 isolated worktrees, actual dispatch identity and independent reviews. The old
 conflict between “never delegate to another plugin” and mandated orchestration
 tiers disappears because these are internal roles under one coordinator.
@@ -100,7 +101,8 @@ Version 0.4.1 adds evaluation evidence; its runtime fixes are from 0.4.0.
 - The original install/uninstall script is not part of this bundle. Its owned-
   symlink uninstall correction is inapplicable to marketplace installation.
 - Upstream routing measurements remain upstream observations, not evidence for
-  changing this bundle's configured/inherited models. No model pins were added.
+  changing this bundle's configured/inherited models. No model pins were added. (Superseded for
+  implementers and reviewers by task tier routing, below.)
 - The upstream instruction to delete stray files is not adopted: preserve and
   report unexpected work. No broad staging or cleanup authorization is introduced.
 
@@ -146,7 +148,8 @@ an audit of nine real runs and adopt mechanisms from the integrated sources:
   the engine remains the only state owner and imports results from the host journal.
 
 Workflow journals are host-written provenance, not authentication. Model pins
-remain excluded: the workflows inherit the configured model unless the user selects one.
+remain excluded: the workflows inherit the configured model unless the user selects one (until
+task tier routing, below).
 
 ## One execution loop (1.3.0, orchestrate 0.7.0)
 
@@ -163,7 +166,7 @@ and maps each loop step onto the existing engine commands (`task-prepare`,
 `review-token`, `review-import`). The engine stays the only state owner and the only
 judge of budgets and convergence; orchestrate's tier escalation, tie-break and
 model routing are not used under Delivery, which keeps inheriting the configured
-model. `task-abandon` also recognizes the loop's implementer labels. Orchestrate's
+model (task tier routing, below, later adopted the tier-to-model mapping but not the escalation). `task-abandon` also recognizes the loop's implementer labels. Orchestrate's
 Codex runner refuses authority arguments, so Codex keeps the native-agent path.
 
 
@@ -193,3 +196,21 @@ Codex runner refuses authority arguments, so Codex keeps the native-agent path.
   with the way out. The gates rerun on the current content and the review follows.
 - The upstream release tooling (`scripts/release.py`, `release.yml`, `AGENTS.md`)
   and its tests are not applicable; this repository has its own release check.
+
+## Task tier routing (unreleased)
+
+`skills/delivery/routing.json` copies the Claude section and the risk tags of
+orchestrate's `skill/routing.json` at the pinned upstream; a test keeps the two equal.
+A plan task may carry orchestrate's `tier`, `reviewer_tier` and `risk` fields, checked
+by the engine with orchestrate's rules (tier 1 to 3, reviewer not below the tier) plus
+two from its routing evidence: tier 1 is reviewed at least one tier up and takes no
+risky tag. `workflow_steps.py args` maps the tier to the implementer's model, the
+reviewer tier (default 3) to the conformance lens, a risky tag to an adversary lens on
+another model (orchestrate's `lenses_for` rule) and `security` to the security lens.
+This supersedes the earlier sections' rule that the workflows inherit the configured
+model: implementers and reviewers of tiered tasks follow the tier, while the coordinator
+and untiered tasks still inherit it, and a model the user selects overrides the tiers.
+Orchestrate's escalation chain is still not used (the authority loop runs one step per
+task), and Codex keeps configured models because the table names Claude models.
+`workflow_steps.py path` sends a Small run with at most two independent open tasks without a risky tag
+tasks to the native-agent path instead of the loop.

@@ -86,7 +86,9 @@ gate commands, integrated cases, explicit side-effect risks and cleanup. An
 oracle names an observable result; a bare status such as "exit 0" is refused.
 Map every requirement to a task and an integrated case. Serialize shared paths
 or resources. Use tasks small enough to return one testable, independently
-reviewable change. Do not split one indivisible edit just to use more agents.
+reviewable change. Give each task a `tier` (1: exact reference and a runnable check; 2: a
+clear spec; 3: structural, cross-module or hard) and its `risk` tags; tier 1 takes no
+risky tag and is reviewed one tier up. Do not split one indivisible edit just to use more agents.
 
 Small: retain the same scope, worktree, test, independent-review and PR rules, but
 do not manufacture a multi-document spec. Explain the bounded assumption and
@@ -109,31 +111,38 @@ JSON, no reusing old approval. Preserve old artifacts and worktrees.
 This skill explicitly delegates bounded implementation and independent review
 when the host supports them. Use the host's actual agent facilities described in
 the host reference, not an untracked shell process or a second competing harness.
-Use configured/inherited models unless the user explicitly selects a model.
+Each task's implementer and reviewers run on its tier's model from `routing.json`
+(1 haiku, 2 sonnet, 3 opus; reviewers at the task tier or above, default 3). The
+coordinator and untiered tasks keep the configured model; a model the user selects
+overrides the tiers.
 Ask once if required capabilities or cost authority are missing.
 
-On a host with a workflow runtime (Claude Code), run the shared execution loop,
+Choose the path first: `scripts/workflow_steps.py --run ROOT path`. `direct` (a Small
+run with at most two independent open tasks and no risky tag) skips the loop: use the
+native-agent steps below with the models it reports. `loop` gives its reasons.
+
+On a host with a workflow runtime (Claude Code), when `path` says `loop`, run the shared execution loop,
 so every step is code and agent identity and results come from the host journal
 instead of typed text (details in the host reference):
 
 - `scripts/workflow_steps.py --run ROOT args [--task T …] --lens conformance
-  [--lens adversary] [--lens security]` prints the loop's arguments (adversary for
-  concurrency, async, retries or data; security for authority or input handling).
+  [--lens adversary] [--lens security]` prints the loop's arguments (a risky tag adds
+  adversary, `security` adds security; `--lens` adds more).
 - Launch the `orchestrate-execute` workflow with that object as `args`. Per task it
   prepares, registers each dispatch, imports each result, runs the planned gates,
   records rework, issues review tokens and imports the verdicts through the
   engine. The engine's budgets decide; a refusal ends the task BLOCKED with its reason.
 - Cost: relay steps (prepare, dispatch, collect, gate, review open/close, finish) only run one
   engine command and return its JSON, so `args` defaults them to `haiku` at `low` effort
-  (`--utility-model`, `--utility-effort` override). Implementers use `--model/--effort`, review
-  lenses `--review-model/--review-effort` (default: the same as the implementer); when none is
-  given they inherit the session model. Start the coordinator from a fresh or compacted context
+  (`--utility-model`, `--utility-effort` override). Implementers and review lenses follow the task
+  tiers; `--model/--effort` set one model for all of them, `--review-model/--review-effort`
+  for the reviewers only. Start the coordinator from a fresh or compacted context
   (under about 200k tokens) before launching a loop: every coordinator turn re-reads it.
 - After `integrate` and the integrated gates, `args --integration` runs the
   integrated review the same way. Read `status` after every loop; never redo a
   step the loop recorded.
 
-Otherwise, for each dependency-ready task:
+On the `direct` path, or a host without a workflow runtime, for each dependency-ready task:
 
 1. `task-prepare` creates its worktree and an external task JSON contract.
 2. Spawn a real worker with that exact worktree, owned paths, acceptance, gates,

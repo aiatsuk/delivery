@@ -5,6 +5,7 @@ The loop is ``workflows/orchestrate-execute.js``, a verbatim copy of the pinned 
 workflow. It calls this helper once per mechanical step through a relay agent and reads exactly one
 JSON object from stdout (contract: the orchestrate reference ``authority.md``):
 
+  workflow_steps.py --run ROOT path
   workflow_steps.py --run ROOT args [--task T ...] [--lens L ...] [--model M] [--effort E] [--integration]
   workflow_steps.py --run ROOT prepare --task T
   workflow_steps.py --run ROOT dispatch --task T
@@ -16,7 +17,9 @@ JSON object from stdout (contract: the orchestrate reference ``authority.md``):
   workflow_steps.py --run ROOT finish --task T
 
 Every step runs the ordinary ``delivery.py`` command, so the engine's guards, gate jobs, journal
-import and budgets apply unchanged; this file only translates. A refusal that the loop cannot
+import and budgets apply unchanged; this file only translates. ``path`` says whether the open
+tasks need the loop at all, and ``args`` routes each task's implementer and reviewers by its tier
+(``routing.json``) unless the user selected a model. A refusal that the loop cannot
 repair by another round (the run is blocked, a budget is spent, an attempt was invalidated, an
 unauthorized gate) comes back as ``blocked`` with the engine's reason.
 """
@@ -395,8 +398,100 @@ def step_finish(a) -> dict:
 
 # ---------------------------------------------------------------- arguments for the loop
 
-UTILITY_MODEL = "haiku"
-UTILITY_EFFORT = "low"
+def routing() -> dict:
+    import run_engine
+    try:
+        return run_engine.routing_table()
+    except run_engine.RunError as exc:
+        raise StepError(exc.message) from None
+
+
+def routed_fields(task: dict) -> tuple:
+    """A stored task's tier, reviewer tier and risk tags; plans stored by older versions are not
+    revalidated, so a value of the wrong type is refused here instead of crashing the routing."""
+    tid = task.get("id", "?")
+    tier, reviewer, risk = task.get("tier"), task.get("reviewer_tier"), task.get("risk", [])
+    for name, value in (("tier", tier), ("reviewer_tier", reviewer)):
+        if value is not None and (type(value) is not int or value not in (1, 2, 3)):
+            raise StepError(f"task {tid}: stored {name} {value!r} is not 1, 2 or 3; revise the plan")
+    if not isinstance(risk, list) or not all(isinstance(tag, str) for tag in risk):
+        raise StepError(f"task {tid}: stored risk {risk!r} is not a list of tags; revise the plan")
+    return tier, reviewer, risk
+
+
+def tier_step(table: dict, tier: int) -> dict:
+    entry = table["tiers"][str(tier)]
+    return {"model": entry["model"], "effort": entry.get("effort")}
+
+
+def task_routing(table: dict, task: dict, a) -> tuple[dict, list[dict]]:
+    """The implementer step and review lenses for one task.
+
+    A model the user selected (--model, --review-model) wins over the task's tier. A task
+    without a tier keeps the host's configured model, as plans written before tiers did.
+    """
+    tier, reviewer, risk = routed_fields(task)
+    if a.model or not tier:
+        step = {"tier": 0, "model": a.model, "effort": a.effort}
+    else:
+        step = {"tier": tier, **tier_step(table, tier)}
+        if a.effort:
+            step["effort"] = a.effort
+    keys = list(dict.fromkeys(a.lens or ["conformance"]))
+    risk = set(risk)
+    if risk & set(table["risky_tags"]) and "adversary" not in keys:
+        keys.append("adversary")
+    if "security" in risk and "security" not in keys:
+        keys.append("security")
+    if a.review_model or a.model or not tier:
+        model, effort = a.review_model or a.model, a.review_effort or a.effort
+        return step, [{"key": key, "model": model, "effort": effort} for key in keys]
+    conformance = tier_step(table, reviewer or max(table["reviewer_default_tier"], tier))
+    adversary = {"model": table["adversary"]["model"], "effort": table["adversary"].get("effort")}
+    if adversary["model"] == conformance["model"]:
+        top = tier_step(table, 3)
+        adversary = tier_step(table, 2) if conformance["model"] == top["model"] else top
+    effort = a.review_effort or a.effort
+    for lens in (conformance, adversary):
+        if effort:
+            lens["effort"] = effort
+    return step, [{"key": key, **(adversary if key == "adversary" else conformance)} for key in keys]
+
+
+DIRECT_MAX_TASKS = 2
+
+
+def choose_path(a) -> dict:
+    """Whether the remaining tasks need the shared loop or fit the manual native-agent path."""
+    run = run_state(a.run)
+    if not run.get("plan"):
+        raise StepError("the run has no plan")
+    table = routing()
+    plan = run["plan"]
+    open_tasks = [t for t in plan["tasks"] if (run["tasks"].get(t["id"]) or {}).get("status") != "VERIFIED"]
+    level = (plan.get("classification") or {}).get("level")
+    risks = {t["id"]: routed_fields(t)[2] for t in open_tasks}
+    risky = sorted({tag for tags in risks.values() for tag in tags if tag in table["risky_tags"]})
+    ids = {t["id"] for t in open_tasks}
+    linked = sorted(t["id"] for t in open_tasks if set(t.get("depends_on", [])) & ids)
+    reasons = []
+    if level != "small":
+        reasons.append(f"classification is {level}, not small")
+    if len(open_tasks) > DIRECT_MAX_TASKS:
+        reasons.append(f"{len(open_tasks)} open tasks, more than {DIRECT_MAX_TASKS}")
+    if risky:
+        reasons.append(f"risky tags: {', '.join(risky)}")
+    if linked:
+        reasons.append(f"tasks depend on each other: {', '.join(linked)}")
+    defaults = argparse.Namespace(model=None, effort=None, lens=None, review_model=None, review_effort=None)
+    routes = []
+    for task in open_tasks:
+        step, lenses = task_routing(table, task, defaults)
+        routes.append({"id": task["id"], "tier": task.get("tier"), "implementer": {"model": step["model"], "effort": step["effort"]},
+                       "reviewers": lenses})
+    if not open_tasks:
+        return {"path": "none", "reasons": ["every task is verified"], "tasks": []}
+    return {"path": "loop" if reasons else "direct", "reasons": reasons, "tasks": routes}
 
 
 def loop_version() -> str:
@@ -415,24 +510,22 @@ def build_args(a) -> dict:
     unknown = sorted(set(selected) - set(order))
     if unknown:
         raise StepError(f"unknown task(s): {', '.join(unknown)}")
-    step = {"tier": 0, "model": a.model, "effort": a.effort}
-    review_model = a.review_model or a.model
-    review_effort = a.review_effort or a.effort
-    lenses = [{"key": lens, "model": review_model, "effort": review_effort} for lens in (a.lens or ["conformance"])]
+    table = routing()
     # Relay steps only run one engine command and return its JSON, so they never need the session's model.
-    utility = {"tier": 0, "model": a.utility_model or UTILITY_MODEL, "effort": a.utility_effort or UTILITY_EFFORT}
+    utility = {"tier": 0, "model": a.utility_model or table["utility"]["model"], "effort": a.utility_effort or table["utility"].get("effort")}
     tasks = []
     for tid in order:
         if tid not in selected:
             continue
         task = plan_task(run, tid)
+        step, lenses = task_routing(table, task, a)
         safe = [argv_text(g["command"]) for g in task["gates"] if g.get("risk", "safe") == "safe"]
         tasks.append({
             "id": tid, "title": task.get("title", tid), "spec": str(Path(a.run) / "tasks" / f"{tid}.json"), "spec_sha256": None,
             "worktree": None, "branch": None, "start_head": None, "worktree_id": None,
             # Unselected dependencies must already be verified; the engine checks that when it prepares.
             "scope": task["paths"], "depends_on": [dep for dep in task["depends_on"] if dep in selected], "scaffold_from": [],
-            "gate": safe, "risk": [], "gate_label_prefix": f"task-{tid}", "chain": [step], "lenses": lenses,
+            "gate": safe, "risk": list(task.get("risk", [])), "gate_label_prefix": f"task-{tid}", "chain": [step], "lenses": lenses,
         })
     integration = None
     if a.integration:
@@ -440,6 +533,13 @@ def build_args(a) -> dict:
         if not owner:
             raise StepError("the run has no integration worktree; run integrate first")
         plan = run["plan"]
+        planned = plan.get("tasks", [])
+        # The integrated diff is reviewed at the top tier when the plan routes by tier, with an
+        # adversary when any task carried a risky tag; untiered plans keep the configured model.
+        whole = {"risk": sorted({tag for t in planned for tag in t.get("risk", [])})}
+        if any(t.get("tier") for t in planned):
+            whole.update(tier=3, reviewer_tier=3)
+        _, lenses = task_routing(table, whole, a)
         integration = {
             # refresh rebases the integration and records the new base on it, not on the run.
             "worktree": owner["path"], "base_sha": owner["base_sha"], "acceptance": plan.get("goal", ""),
@@ -469,13 +569,14 @@ def parser() -> argparse.ArgumentParser:
     args = sub.add_parser("args")
     args.add_argument("--task", action="append")
     args.add_argument("--lens", action="append")
-    args.add_argument("--model")
-    args.add_argument("--effort")
+    args.add_argument("--model", help="one model for every implementer and reviewer; overrides the task tiers")
+    args.add_argument("--effort", help="one effort for every implementer and reviewer; overrides the tier effort")
     args.add_argument("--review-model", help="model for review lenses; defaults to --model")
     args.add_argument("--review-effort", help="effort for review lenses; defaults to --effort")
-    args.add_argument("--utility-model", help=f"model for relay steps (default {UTILITY_MODEL})")
-    args.add_argument("--utility-effort", help=f"effort for relay steps (default {UTILITY_EFFORT})")
+    args.add_argument("--utility-model", help="model for relay steps (default: the utility model of routing.json)")
+    args.add_argument("--utility-effort", help="effort for relay steps (default: the utility effort of routing.json)")
     args.add_argument("--integration", action="store_true")
+    sub.add_parser("path", help="whether the open tasks fit the manual native-agent path or need the shared loop")
     for name in ("prepare", "dispatch", "collect", "finish"):
         sub.add_parser(name).add_argument("--task", required=True)
     gate = sub.add_parser("gate")
@@ -495,7 +596,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 STEPS = {"prepare": step_prepare, "dispatch": step_dispatch, "collect": step_collect, "gate": step_gate, "rework": step_rework,
-         "review-open": step_review_open, "review-close": step_review_close, "finish": step_finish}
+         "review-open": step_review_open, "review-close": step_review_close, "finish": step_finish, "path": choose_path}
 
 
 def main(argv=None) -> int:
@@ -504,7 +605,7 @@ def main(argv=None) -> int:
         if a.step == "args":
             return emit(build_args(a))
         return emit(STEPS[a.step](a))
-    except (StepError, OSError, ValueError, KeyError) as exc:
+    except (StepError, OSError, ValueError, KeyError, TypeError) as exc:
         # Unexpected state is never guessed around: the loop blocks the task with this reason. The object
         # also fills the gate and finish shapes, so a relay can return it unchanged from any step.
         print(json.dumps({"exit_code": 2, "output": str(exc), "blocked": f"{a.step} failed: {exc}", "tail": str(exc), "tree": "", "head": "",

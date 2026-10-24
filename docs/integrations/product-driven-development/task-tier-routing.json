@@ -1,0 +1,20 @@
+{
+  "source_revision": "ebe92fbdda305fbf117badb16fecff233d5de287",
+  "disposition": "integrated",
+  "rationale": "Same pin, no upstream change. Delivery adds task tier routing: optional plan task fields tier, reviewer_tier and risk (run_engine.routing_fields: tier 1 to 3, reviewer not below the tier and at least 2 for tier 1, risk tags from skills/delivery/routing.json, tier 1 without risky tags; a null reviewer_tier means the default), per-task implementer and reviewer models in workflow_steps.py args (task_routing: tier model, reviewer tier default 3, adversary on another model for a risky tag, security lens for security; --model and --review-model override; untiered tasks keep model None), relay steps on the table's utility model, and workflow_steps.py path, which sends a Small run with at most two independent open tasks without a risky tag to the native-agent path. Docs (SKILL.md, host-execution.md, run-contract.md, PROVENANCE.md, README.md) replace the rule that implementers and reviewers inherit the configured model; the coordinator and untiered tasks still inherit it. The product-memory and session-evidence rules are unchanged; only the shared PROVENANCE.md and README.md text about models changed.",
+  "reviewer": "Independent read-only reviewer agents that did not write the change, on October 24, 2026: an error-path reviewer (FAIL with five minor items: TypeError escaping main as a traceback for stored fields of the wrong type, routing.json loaded at import, routing.json missing from validate_bundle's required files, --effort and --review-effort not reaching every lens, tests that could not fail; all fixed and covered by tests), then an independent reviewer of the whole branch (PASS, no blocking defect; minor items fixed: 'risk-free' wording, superseded inherited-model sentences, docs/SYNCHRONIZATION.md, a null reviewer_tier, four uncovered cases now tested). Review prose does not authenticate identity.",
+  "tests": "On October 24, 2026, on the final content: tools tests 33 OK; plug-in catalog 585 tests OK in 1779 s, including tests/test_routing.py (32 tests: plan field validation, per-task routing and overrides, integration lenses, the path command, a malformed routing table, stored fields of the wrong type); tests.test_routing fails 6 tests with the routing removed and 1 with the security-lens rule removed; validate_bundle ok. make check runs after this record. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skills/product-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/README.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/artifacts.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/session-evidence.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/session_evidence.py",
+    "plugins/delivery-harness/skills/delivery/scripts/product.py",
+    "plugins/delivery-harness/tests/product_memory/test_session_evidence.py",
+    "plugins/delivery-harness/tests/test_product.py"
+  ]
+}
