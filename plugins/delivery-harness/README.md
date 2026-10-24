@@ -42,7 +42,9 @@ host's agents, sandbox, credentials, user approvals or background scheduler.
 No installed copy of those plugins is needed at runtime. Existing plugins are
 left untouched; do not invoke them as additional top-level coordinators inside a
 Delivery Harness run. Their useful mechanisms are shipped as internal modules and
-one precedence contract. Configured models are inherited, never secretly pinned.
+one precedence contract. Implementers and reviewers run on their task tier's model
+(`skills/delivery/routing.json`); the coordinator keeps the configured model, and a
+model the user selects overrides the tiers.
 
 The Orchestrate integration now reflects upstream 0.8.0; see the selective-update
 mapping in [provenance](PROVENANCE.md). Upstream plugins can be updated independently,

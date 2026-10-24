@@ -26,7 +26,8 @@ No runtime script imports from `upstream/` or starts another coordinator.
    The status must now require review. No command here copies upstream code into
    the plug-in, rewrites other pins, executes installers or grants new authority.
 4. Map applicable upstream changes to the existing integration. Preserve local
-   fixes, API contracts, one coordinator, inherited model policy, clean worktrees,
+   fixes, API contracts, one coordinator, the model policy (task tier routing from `routing.json`, the coordinator
+   inheriting the configured model), clean worktrees,
    explicit side-effect approval and exact-PR merge approval. For non-applicable
    changes explain why; do not replace an adapted engine wholesale.
 5. Add a new JSON record under `docs/integrations/<source>/`. Include exact

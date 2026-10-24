@@ -1,5 +1,24 @@
 # Changes
 
+## Unreleased
+
+Task tier routing and a direct path for small runs.
+
+- A plan task may carry `tier` (1 to 3), `reviewer_tier` and `risk` tags. The
+  engine checks them: the reviewer is not below the tier, tier 1 is reviewed at
+  least one tier up and takes no risky tag (async, concurrency, security,
+  migration, data).
+- `workflow_steps.py args` routes each task by its tier through
+  `skills/delivery/routing.json`, a copy of the pinned orchestrate routing table: the
+  implementer on the tier's model, the conformance reviewer on the reviewer tier
+  (default 3), an adversary lens on another model for a risky tag, a security lens
+  for `security`. Untiered tasks keep the configured model; `--model` and
+  `--review-model` still override every tier. Relay steps run on the table's
+  utility model (haiku at low effort).
+- `workflow_steps.py path` says whether the open tasks need the shared loop:
+  a Small run with at most two independent open tasks without a risky tag takes the
+  native-agent path, which skips the loop's relay agents.
+
 ## 1.5.0
 
 A new loop contract: an interrupted task resumes at the gate.
