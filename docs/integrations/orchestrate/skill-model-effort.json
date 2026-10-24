@@ -1,0 +1,41 @@
+{
+  "source_revision": "e4d73a7f97082cb1a2585208ff3db1f9d4b0d130",
+  "disposition": "integrated",
+  "rationale": "Same pin, no upstream change. The only mapped file that changed is plugins/delivery-harness/skills/delivery/SKILL.md, whose frontmatter gains two keys after the description: model: inherit and effort: high. The skill body, references, scripts and tests are byte-identical, so the upstream-derived rules this record covers are unchanged. model: inherit keeps the bundle's rule that configured models are inherited and never pinned (README, PROVENANCE, SKILL.md 'Use configured/inherited models'); effort: high applies to a delivery turn on a host that reads the key and is ignored by hosts that do not. Delivery runs its own bundled copies and does not invoke the upstream skills, so their own frontmatter changes on separate branches do not reach this pin.",
+  "reviewer": "Independent read-only reviewer agents that did not write the change, on October 24, 2026. The first reviewed the uncommitted diffs of all eleven repositories in this change: the delivery SKILL.md is byte-identical apart from the two added lines, its frontmatter parses as YAML with valid values, validate_bundle passes, and delivery does not load the upstream skills. A second, error-path reviewer checked these records against review_data (source revision equals the pinned submodule, disposition valid, non-empty fields, upstream paths present at the pin, unique integration paths, lock hashes equal to the files, lock byte-identical to the tool's output) and flagged that an earlier model: opus contradicted the inherited-models rule; model: inherit resolves it. Review prose does not authenticate identity.",
+  "tests": "On October 24, 2026, with the final model: inherit and effort: high: make check passed (upstreams check, validate_bundle, git diff --check; before the first record the upstreams check failed only with 'Review or mapped integration content changed; renew review' for orchestrate and factory, and passed with the SKILL.md change temporarily reverted); make test passed (tools tests 33 OK; plug-in catalog 552 tests OK); plugin validate of plugins/delivery-harness passed; a live headless run with the plug-in loaded from this branch invoked /delivery-harness:delivery and stayed on haiku in a session started on haiku and on sonnet in a session started on sonnet. The same suites also passed earlier with model: opus. This record does not authenticate test execution.",
+  "upstream_paths": [
+    "skill/workflows/orchestrate-execute.js",
+    "skill/references/authority.md",
+    "skill/SKILL.md",
+    "tests/test_workflow_authority.py",
+    "tests/workflow_harness.js",
+    "CHANGELOG.md",
+    "VERSION"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/README.md",
+    "plugins/delivery-harness/scripts/validate_bundle.py",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/analyzer-checks.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/analyzer_delta.py",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/gate_jobs.py",
+    "plugins/delivery-harness/skills/delivery/scripts/git_ops.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_journal.py",
+    "plugins/delivery-harness/skills/delivery/scripts/workflow_steps.py",
+    "plugins/delivery-harness/skills/delivery/workflows/orchestrate-execute.js",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_gate_jobs.py",
+    "plugins/delivery-harness/tests/test_git_ops.py",
+    "plugins/delivery-harness/tests/test_orchestrate_update.py",
+    "plugins/delivery-harness/tests/test_publisher.py",
+    "plugins/delivery-harness/tests/test_run_engine.py",
+    "plugins/delivery-harness/tests/test_workflows.py",
+    "plugins/delivery-harness/tests/workflow_harness.js"
+  ]
+}

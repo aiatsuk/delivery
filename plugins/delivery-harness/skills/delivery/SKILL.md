@@ -1,6 +1,8 @@
 ---
 name: delivery
 description: Use when the user invokes Delivery Harness or asks to coordinate product-driven, spec-driven, AI Factory, orchestration and platform change flow as one workflow. Own one delivery run from explicit product context and risk classification through approved specs, isolated implementation agents, actual-diff verification, commit, push and PR; resume after review for authorized rebase, merge and safe cleanup. Also audit or resume an existing run without starting competing coordinators. Do not auto-route unrelated tasks or treat a status request as permission to change code.
+model: inherit
+effort: high
 ---
 
 # Delivery Harness
