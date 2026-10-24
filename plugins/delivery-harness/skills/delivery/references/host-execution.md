@@ -60,7 +60,8 @@ dispatch for an authorized retry. Never reuse a prior report as its new result.
 
 `workflow_steps.py --run ROOT path` returns `direct` for a Small run whose open
 tasks are at most two, independent of each other and free of risky tags, with each
-task's implementer and reviewer models. Run those tasks on the native-agent path
+task's implementer and reviewer models and efforts. Spawn with both, or the tier
+effort is lost. Run those tasks on the native-agent path
 (`task-register`, a spawned worker, `task-report`, the gates, a typed `review` by a
 separate agent): the loop would add seven relay agents to every pass of a task.
 Anything else returns `loop` and the reasons. Unlike orchestrate's root plus review, the direct

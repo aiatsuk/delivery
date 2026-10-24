@@ -1,0 +1,22 @@
+{
+  "source_revision": "ba64c6220167364e4c1f8d209e9ed77f12f57968",
+  "disposition": "integrated",
+  "rationale": "Same pin, no upstream change. The 1.6.0 release changes only the shared PROVENANCE.md and README.md text (pin table, tier routing section) and the delivery skill text about passing the tier effort on the direct path; the factory-derived rules are unchanged.",
+  "reviewer": "Independent read-only reviewer agent that did not write the change, on October 24, 2026, reviewing the uncommitted 1.6.0 release content (FAIL before this record: the orchestrate record and lock were not renewed yet, which this record does; the PROVENANCE pin table still named 0.8.0; minor: the section heading said unreleased, an overstated sentence about the engine enforcing the same tier 1 rules, the direct path not telling the coordinator to pass the tier effort, and a garbled sentence; all fixed). It confirmed the shipped loop is byte-identical to upstream at the new pin with SCRIPT_VERSION 0.9.0, that loop_version reads the shipped file, that authority.md, the authority tests and the loop logic did not change upstream, and that routing.json equals the pinned claude section and tags. Review prose does not authenticate identity.",
+  "upstream_paths": [
+    "skills/factory-small/SKILL.md",
+    "skills/factory-gates/SKILL.md"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/skills/delivery/SKILL.md",
+    "plugins/delivery-harness/skills/delivery/references/host-execution.md",
+    "plugins/delivery-harness/skills/delivery/references/run-contract.md",
+    "plugins/delivery-harness/skills/delivery/scripts/delivery.py",
+    "plugins/delivery-harness/skills/delivery/scripts/run_engine.py",
+    "plugins/delivery-harness/tests/test_execution_control.py",
+    "plugins/delivery-harness/tests/test_run_adversarial.py",
+    "plugins/delivery-harness/tests/test_run_engine.py"
+  ],
+  "tests": "On October 24, 2026, with the orchestrate pin at d438044 and the 1.6.0 content: tools tests 33 OK; plug-in catalog 585 tests OK in 1840 s, including tests/test_routing.py (the table equals the pinned claude section with its efforts; efforts read from the table reach the implementer, the reviewers and the path report) and tests/test_workflows.py (the shipped loop equals the pinned upstream file; args carry loop version 0.9.0); release.py check --tag v1.6.0 ok; validate_bundle ok. make check runs after this record. This record does not authenticate test execution."
+}

@@ -120,7 +120,9 @@ class ArgsRoutingTests(RunFixture):
     def test_a_tier_routes_the_implementer_and_the_default_reviewer(self):
         self.begin(tiered(tier=2))
         [task] = self.args()["tasks"]
-        self.assertEqual((2, "sonnet"), (task["chain"][0]["tier"], task["chain"][0]["model"]))
+        tiers = w.routing()["tiers"]
+        self.assertEqual((2, "sonnet", tiers["2"]["effort"]), (task["chain"][0]["tier"], task["chain"][0]["model"], task["chain"][0]["effort"]))
+        self.assertEqual(tiers["3"]["effort"], task["lenses"][0]["effort"])
         self.assertEqual([("conformance", "opus")], self.lenses(task))
 
     def test_tier_one_with_a_reviewer_one_tier_up(self):
@@ -176,7 +178,8 @@ class ArgsRoutingTests(RunFixture):
         [task] = self.args("--effort", "medium")["tasks"]
         self.assertEqual(["medium", "medium", "medium"], [task["chain"][0]["effort"]] + [lens["effort"] for lens in task["lenses"]])
         [task] = self.args("--review-effort", "high")["tasks"]
-        self.assertEqual([None, "high", "high"], [task["chain"][0]["effort"]] + [lens["effort"] for lens in task["lenses"]])
+        tier_effort = w.routing()["tiers"]["2"]["effort"]
+        self.assertEqual([tier_effort, "high", "high"], [task["chain"][0]["effort"]] + [lens["effort"] for lens in task["lenses"]])
 
     def corrupt(self, **fields):
         run = json.loads((self.root / "run.json").read_text())
@@ -244,8 +247,9 @@ class PathTests(RunFixture):
     def test_a_small_independent_task_without_risk_takes_the_direct_path(self):
         out = self.path(tiered(tier=2))
         self.assertEqual(("direct", []), (out["path"], out["reasons"]))
-        self.assertEqual({"model": "sonnet", "effort": None}, out["tasks"][0]["implementer"])
-        self.assertEqual([{"key": "conformance", "model": "opus", "effort": None}], out["tasks"][0]["reviewers"])
+        tiers = w.routing()["tiers"]
+        self.assertEqual({"model": "sonnet", "effort": tiers["2"]["effort"]}, out["tasks"][0]["implementer"])
+        self.assertEqual([{"key": "conformance", "model": "opus", "effort": tiers["3"]["effort"]}], out["tasks"][0]["reviewers"])
 
     def test_a_dependency_on_a_verified_task_does_not_link_the_open_ones(self):
         e.set_plan(self.root, two_tasks(depends_on=["value"]))
