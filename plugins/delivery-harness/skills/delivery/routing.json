@@ -7,11 +7,13 @@
     },
     "2": {
       "model": "sonnet",
-      "effort": "xhigh"
+      "effort": "high",
+      "review_effort": "xhigh"
     },
     "3": {
       "model": "opus",
-      "effort": "high"
+      "effort": "medium",
+      "review_effort": "high"
     }
   },
   "reviewer_default_tier": 3,

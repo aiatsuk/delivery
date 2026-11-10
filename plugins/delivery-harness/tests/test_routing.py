@@ -122,8 +122,43 @@ class ArgsRoutingTests(RunFixture):
         [task] = self.args()["tasks"]
         tiers = w.routing()["tiers"]
         self.assertEqual((2, "sonnet", tiers["2"]["effort"]), (task["chain"][0]["tier"], task["chain"][0]["model"], task["chain"][0]["effort"]))
-        self.assertEqual(tiers["3"]["effort"], task["lenses"][0]["effort"])
+        self.assertEqual(tiers["3"]["review_effort"], task["lenses"][0]["effort"])
         self.assertEqual([("conformance", "opus")], self.lenses(task))
+
+    def test_a_tier_reviews_at_its_review_effort_and_implements_at_its_effort(self):
+        # The implementer levels were measured against reviewers at these levels; a reviewer
+        # must not follow an implementer's level down.
+        tiers = w.routing()["tiers"]
+        self.assertEqual(("high", "xhigh", "medium", "high"), (tiers["2"]["effort"], tiers["2"]["review_effort"],
+                                                               tiers["3"]["effort"], tiers["3"]["review_effort"]))
+        self.begin(tiered(tier=3, risk=["data"]))
+        [task] = self.args()["tasks"]
+        self.assertEqual({"tier": 3, "model": "opus", "effort": "medium"}, task["chain"][0])
+        self.assertEqual([{"key": "conformance", "model": "opus", "effort": "high"}], task["lenses"][:1])
+        self.assertTrue(all("review_effort" not in item for item in [*task["chain"], *task["lenses"]]))
+
+    def test_tier_one_work_is_reviewed_at_tier_two_review_effort(self):
+        self.begin(tiered(tier=1, reviewer_tier=2))
+        [task] = self.args()["tasks"]
+        self.assertEqual([{"key": "conformance", "model": "sonnet", "effort": "xhigh"}], task["lenses"])
+
+    def test_a_moved_adversary_takes_the_review_effort_of_its_new_tier(self):
+        self.begin(tiered(tier=2, reviewer_tier=2, risk=["data"]))
+        [task] = self.args()["tasks"]
+        self.assertEqual([{"key": "conformance", "model": "sonnet", "effort": "xhigh"},
+                          {"key": "adversary", "model": "opus", "effort": "high"}], task["lenses"])
+
+    def test_a_tier_without_a_review_effort_reviews_at_its_own_effort(self):
+        for absent in ("missing", None, ""):
+            with self.subTest(review_effort=absent):
+                table = json.loads(json.dumps(w.routing()))
+                for entry in table["tiers"].values():
+                    if absent == "missing":
+                        entry.pop("review_effort", None)
+                    else:
+                        entry["review_effort"] = absent
+                self.assertEqual({"model": "opus", "effort": "medium"}, w.tier_lens(table, 3))
+                self.assertEqual({"model": "sonnet", "effort": "high"}, w.tier_lens(table, 2))
 
     def test_tier_one_with_a_reviewer_one_tier_up(self):
         self.begin(tiered(tier=1, reviewer_tier=2))
@@ -249,7 +284,7 @@ class PathTests(RunFixture):
         self.assertEqual(("direct", []), (out["path"], out["reasons"]))
         tiers = w.routing()["tiers"]
         self.assertEqual({"model": "sonnet", "effort": tiers["2"]["effort"]}, out["tasks"][0]["implementer"])
-        self.assertEqual([{"key": "conformance", "model": "opus", "effort": tiers["3"]["effort"]}], out["tasks"][0]["reviewers"])
+        self.assertEqual([{"key": "conformance", "model": "opus", "effort": tiers["3"]["review_effort"]}], out["tasks"][0]["reviewers"])
 
     def test_a_dependency_on_a_verified_task_does_not_link_the_open_ones(self):
         e.set_plan(self.root, two_tasks(depends_on=["value"]))

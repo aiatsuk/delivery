@@ -424,6 +424,13 @@ def tier_step(table: dict, tier: int) -> dict:
     return {"model": entry["model"], "effort": entry.get("effort")}
 
 
+def tier_lens(table: dict, tier: int) -> dict:
+    """A tier as a reviewer: its model at `review_effort`, or at the tier's effort when it names none
+    (a missing, null or empty `review_effort` all mean none)."""
+    entry = table["tiers"][str(tier)]
+    return {"model": entry["model"], "effort": entry.get("review_effort") or entry.get("effort")}
+
+
 def task_routing(table: dict, task: dict, a) -> tuple[dict, list[dict]]:
     """The implementer step and review lenses for one task.
 
@@ -446,11 +453,11 @@ def task_routing(table: dict, task: dict, a) -> tuple[dict, list[dict]]:
     if a.review_model or a.model or not tier:
         model, effort = a.review_model or a.model, a.review_effort or a.effort
         return step, [{"key": key, "model": model, "effort": effort} for key in keys]
-    conformance = tier_step(table, reviewer or max(table["reviewer_default_tier"], tier))
+    conformance = tier_lens(table, reviewer or max(table["reviewer_default_tier"], tier))
     adversary = {"model": table["adversary"]["model"], "effort": table["adversary"].get("effort")}
     if adversary["model"] == conformance["model"]:
-        top = tier_step(table, 3)
-        adversary = tier_step(table, 2) if conformance["model"] == top["model"] else top
+        top = tier_lens(table, 3)
+        adversary = tier_lens(table, 2) if conformance["model"] == top["model"] else top
     effort = a.review_effort or a.effort
     for lens in (conformance, adversary):
         if effort:
