@@ -1,5 +1,21 @@
 # Changes
 
+## 1.7.0
+
+Orchestrate 0.10.0: tier 2 and tier 3 implementers one effort level lower, reviewers where they were.
+
+- Pin orchestrate 0.10.0 (680f96d); the shipped loop is the upstream 0.10.0 file
+  (`SCRIPT_VERSION` 0.10.0, no change in the loop's behaviour). Saved copies of the loop
+  must be refreshed, since the loop refuses arguments of another version.
+- `routing.json` takes orchestrate 0.10.0's tiers: tier 2 sonnet implements at high and
+  reviews at xhigh, tier 3 opus implements at medium and reviews at high, from a
+  twelve-cell replay recorded upstream (every cell passed at round zero; tier 3 at medium
+  cost about a quarter less than the same-day control at high).
+- `workflow_steps.py` reads the new optional `review_effort` of a tier for the
+  conformance lens and for an adversary moved to that tier, on the loop path, the
+  integration review and the direct path. A tier without one (missing, null or empty)
+  reviews at its own effort, as before. Implementer steps never carry the key.
+
 ## 1.6.0
 
 Task tier routing, a direct path for small runs, and orchestrate 0.9.0.

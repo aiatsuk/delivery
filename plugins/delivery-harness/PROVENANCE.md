@@ -11,7 +11,7 @@ See NOTICE.md for ownership and licensing boundaries; no blanket license is asse
 | spec-driven-development | 1.0.1 (e9c04b6ce01e855f808af3faadfc1cb36776270a) | Specification/check engine, templates, technical references and regressions; exact source hashes below |
 | product-driven-development | 0.5.0 (ebe92fbdda305fbf117badb16fecff233d5de287) | Markdown model and bounded session evidence helper/tests; provenance below |
 | ai-factory | 1.0.2 (ba64c6220167364e4c1f8d209e9ed77f12f57968) | Risk taxonomy, proportional quality gates, explicit side effects, bounded rework and honest release evidence, re-expressed in the unified contract |
-| orchestrate | 0.9.0 (d43804464763580abfa9318a556262e231fa51d2) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
+| orchestrate | 0.10.0 (680f96d7cf5a442ae502236d6a776c21145ce700) | The execution-loop workflow script, shipped verbatim; dependency-aware isolated work, reviewed patch integration, async review and analyzer-delta contracts; independently implemented Git/runtime protections replace broad staging |
 | platform-change-flow | repository/local skill inspected September 13, 2026 | Fresh main, new worktrees/branches, reviewed PR/rebase merge and conservative cleanup |
 
 No license file was present in the inspected spec/product/factory repositories. No
@@ -22,7 +22,7 @@ Names here identify source workflows and supported hosts, not repository authors
 
 The public spec/product/factory pins match the source skill trees previously used
 for the integration byte-for-byte. Orchestrate is selectively reviewed through
-0.9.0 as described below. Source pins alone do not replace runtime implementations
+0.10.0 as described below. Source pins alone do not replace runtime implementations
 or imply adoption of later upstream updates.
 
 ## Specification engine bundle (spec-driven-development 1.0.0)
@@ -222,3 +222,15 @@ orchestrate's `evals/results/2026-10-24-effort-per-tier.md`. Orchestrate 0.9.0's
 `plan.py` checks stay on its side. The engine enforces the tier 1 risky-tag and reviewer-tier rules for
 plan tasks; orchestrate's reference-line check for tier 1 specs has no counterpart, since Delivery's
 task contract is JSON written by the engine.
+
+Delivery 1.7.0 pins orchestrate 0.10.0 (680f96d): the shipped loop is the upstream 0.10.0 file
+(`SCRIPT_VERSION` 0.10.0, no behaviour change in the loop itself), and `routing.json` takes that
+release's tiers: implementers one level lower (tier 2 sonnet at `high`, tier 3 opus at `medium`) and
+a `review_effort` per tier that keeps reviewers where they were (tier 2 at `xhigh`, tier 3 at `high`),
+measured in orchestrate's `evals/results/2026-11-10-tier-efforts.md`. `workflow_steps.py` follows
+`plan.py`'s new `_lens`: the conformance lens and a moved adversary run at the tier's `review_effort`,
+or at its effort when it names none (missing, null or empty), and implementer steps never carry the
+key. Not adopted, because they are orchestrate-side: the orchestrator inheriting the session's model
+(Delivery's coordinator already inherits it), the top rung above tier 3 (the authority loop runs one
+step per task and the engine decides rework), and the process-table fix in `run_workflow.js`, a runner
+Delivery does not ship.

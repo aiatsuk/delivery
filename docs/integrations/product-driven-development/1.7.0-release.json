@@ -1,0 +1,20 @@
+{
+  "source_revision": "ebe92fbdda305fbf117badb16fecff233d5de287",
+  "disposition": "integrated",
+  "rationale": "Same pin, no upstream change. The 1.7.0 release changes only shared PROVENANCE.md text; the product-memory and session-evidence rules are unchanged.",
+  "reviewer": "Independent read-only reviewer agents that did not write the change, on November 10, 2026, reviewing the uncommitted 1.7.0 content before this record: an error-path reviewer (no defect it could show with a concrete input; it traced the reviewer level on the loop arguments, the integration review and the path command, the overrides, and bad table values, and noted that neither effort key is type-checked, as before), then an independent reviewer (PASS, no defect). It confirmed the staged pin is 680f96d and the shipped loop is byte-identical to upstream there with SCRIPT_VERSION 0.10.0, that routing.json equals the pinned claude section and tags, that tier_lens and task_routing give the same lenses as upstream _lens and lenses_for on 182 combinations of tier, reviewer tier, risk set and table, that every reviewer keeps its 1.6.0 model and effort on all three paths while tier 2 implements at sonnet high and tier 3 at opus medium, and that the new tests fail when tier_lens ignores review_effort, when an implementer step carries the key and when the fallback misses a null or empty value. Minor, fixed: a changelog headline that read as if tier 1 changed. Review prose does not authenticate identity.",
+  "upstream_paths": [
+    "skills/product-driven-development"
+  ],
+  "integration_paths": [
+    "plugins/delivery-harness/PROVENANCE.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/README.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/artifacts.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/references/session-evidence.md",
+    "plugins/delivery-harness/skills/delivery/internal/product/session_evidence.py",
+    "plugins/delivery-harness/skills/delivery/scripts/product.py",
+    "plugins/delivery-harness/tests/product_memory/test_session_evidence.py",
+    "plugins/delivery-harness/tests/test_product.py"
+  ],
+  "tests": "On November 10, 2026, with the orchestrate pin at 680f96d and the 1.7.0 content: tools tests 33 OK; plug-in catalog 589 tests OK in 1725 s, including tests/test_routing.py (the table equals the pinned claude section with its review_effort keys; a tier reviews at its review_effort and implements at its effort; a missing, null or empty review_effort falls back; no chain step or lens carries the key) and tests/test_workflows.py (the shipped loop equals the pinned upstream file; args carry loop version 0.10.0); release.py check --tag v1.7.0 ok; validate_bundle ok. make check runs after this record. This record does not authenticate test execution."
+}

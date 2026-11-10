@@ -135,7 +135,8 @@ instead of typed text (details in the host reference):
 - Cost: relay steps (prepare, dispatch, collect, gate, review open/close, finish) only run one
   engine command and return its JSON, so `args` defaults them to `haiku` at `low` effort
   (`--utility-model`, `--utility-effort` override). Implementers and review lenses follow the task
-  tiers; `--model/--effort` set one model for all of them, `--review-model/--review-effort`
+  tiers, reviewers at the tier's review level, which can be higher than its implementer level;
+  `--model/--effort` set one model for all of them, `--review-model/--review-effort`
   for the reviewers only. Start the coordinator from a fresh or compacted context
   (under about 200k tokens) before launching a loop: every coordinator turn re-reads it.
 - After `integrate` and the integrated gates, `args --integration` runs the
